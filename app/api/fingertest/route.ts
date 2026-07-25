@@ -405,6 +405,10 @@ export async function GET() {
   // FINGER_NAMES cannot silently let it back in.
   {
     const { p, hits } = fresh({ ...base, fingerCount: 4 });
+    // The audio call carries no finger identity — that lives on the HitEvent —
+    // so tap onHit to record exactly which fingertip landed each strike.
+    const firedBy: string[] = [];
+    p.onHit = (e) => firedBy.push(e.finger);
     const frames = 16;
     for (let i = 0; i < frames; i++) {
       const y = 0.25 + (0.7 * i) / (frames - 1);
@@ -428,7 +432,6 @@ export async function GET() {
       });
     }
     const voices = hits.map((h) => h.voice).sort();
-    const fingers = hits.map((h) => h.finger ?? "?");
     results.thumbExcludedAtFour = {
       hits: hits.length,
       expected: 1,
@@ -437,9 +440,9 @@ export async function GET() {
       pass:
         hits.length === 1 &&
         voices.join(",") === "snare" &&
-        !fingers.includes("thumb"),
+        !firedBy.includes("thumb"),
       voices,
-      fingers,
+      firedBy,
     };
   }
 
