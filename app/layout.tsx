@@ -2,16 +2,16 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Air Studio — play instruments in the air",
+  title: "Air Piano Duel",
   description:
-    "Play drums, keys and strings in front of your webcam using hand tracking, with an AI that arranges the instrument layout for any song you name.",
+    "A two-player rhythm duel played in the air. Your webcam tracks your hands, an AI builds the chart, and you and a friend go head to head.",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#08090c",
+  themeColor: "#07080a",
   width: "device-width",
   initialScale: 1,
-  // The studio is a fixed stage; pinch-zooming it only ever happens by accident.
+  // A fixed broadcast stage; pinch-zoom only ever happens by accident here.
   maximumScale: 1,
 };
 
@@ -20,6 +20,28 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en">
+      <head>
+        {/*
+          Both faces are self-hosted and used above the fold — the scorebug and
+          the room code are the first things drawn. Preloading them removes the
+          swap flash that would otherwise land right as players are reading a
+          code aloud to each other.
+        */}
+        <link
+          rel="preload"
+          href="/fonts/saira-var-latin.woff2"
+          as="font"
+          type="font/woff2"
+          crossOrigin="anonymous"
+        />
+        <link
+          rel="preload"
+          href="/fonts/anton-latin.woff2"
+          as="font"
+          type="font/woff2"
+          crossOrigin="anonymous"
+        />
+      </head>
       <body className="min-h-full antialiased">{children}</body>
     </html>
   );
