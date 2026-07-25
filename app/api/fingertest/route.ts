@@ -396,6 +396,53 @@ export async function GET() {
     };
   }
 
+  // --- 14. fingerCount 4 excludes the THUMB specifically.
+  //
+  // The duel runs at 4 so the thumb is out: it sits lower and more inboard than
+  // the other tips, folds sideways instead of curling, and is the noisiest
+  // landmark MediaPipe reports — it fires lanes nobody aimed at. This pins the
+  // exclusion to the thumb rather than to "some finger", so reordering
+  // FINGER_NAMES cannot silently let it back in.
+  {
+    const { p, hits } = fresh({ ...base, fingerCount: 4 });
+    const frames = 16;
+    for (let i = 0; i < frames; i++) {
+      const y = 0.25 + (0.7 * i) / (frames - 1);
+      p.update({
+        hands: [
+          makeHand({
+            palmY: y + 0.35,
+            tips: [
+              [0.35, y], // index  -> zone A
+              [0.36, y], // middle -> zone A
+              [0.37, y], // ring   -> zone A
+              [0.38, y], // pinky  -> zone A
+              [0.55, y], // thumb  -> zone B, and fully extended
+            ],
+            extended: [true, true, true, true, true],
+          }),
+        ],
+        timestampMs: 1000 + i * 16,
+        inferenceMs: 5,
+        captureLatencyMs: null,
+      });
+    }
+    const voices = hits.map((h) => h.voice).sort();
+    const fingers = hits.map((h) => h.finger ?? "?");
+    results.thumbExcludedAtFour = {
+      hits: hits.length,
+      expected: 1,
+      // Zone A fires once (the four fingers collapse to one hit per hand), and
+      // zone B — under the thumb alone — must stay silent.
+      pass:
+        hits.length === 1 &&
+        voices.join(",") === "snare" &&
+        !fingers.includes("thumb"),
+      voices,
+      fingers,
+    };
+  }
+
   const all = Object.values(results) as { pass: boolean }[];
   return NextResponse.json({
     allPassed: all.every((r) => r.pass),

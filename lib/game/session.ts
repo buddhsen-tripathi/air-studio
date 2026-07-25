@@ -178,14 +178,15 @@ export class DuelSession {
       // own note — the judge sounds whatever the chart scheduled instead.
       audioMode: "external",
       striker: "fingers",
-      // Index finger only.
+      // Four fingers per hand: index, middle, ring, pinky — no thumb.
       //
-      // Five live strikers made an open hand a five-pointed trigger sweeping
-      // the frame, and with lanes this wide most of the extra fingers were
-      // hovering over a neighbouring lane rather than the one being aimed at.
-      // One decisive point per hand is far easier to aim, and two hands still
-      // give two strikers — enough for the two-lane chords charts can contain.
-      fingerCount: 1,
+      // FINGER_NAMES is ordered index -> middle -> ring -> pinky -> thumb, so a
+      // count of 4 excludes the thumb by construction. That exclusion is the
+      // point: the thumb sits lower and further inboard than the others, folds
+      // sideways rather than curling, and is the noisiest landmark MediaPipe
+      // reports — so it fires lanes the player never aimed at. The other four
+      // approach a lane from the same direction and read as one keyboard hand.
+      fingerCount: 4,
     });
     performer.onHit = (event) => this.handleHit(event);
     this.performer = performer;
