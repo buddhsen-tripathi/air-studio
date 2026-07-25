@@ -32,6 +32,15 @@ import { emptyScore } from "./types";
  */
 
 /**
+ * Per-seat lane palettes: one hue, brightness rising with pitch.
+ * Index 0 is the lowest lane.
+ */
+const SEAT_LANE_COLORS: Record<0 | 1, string[]> = {
+  0: ["#1d6fd0", "#2b8ff0", "#4aa9ff", "#78c4ff", "#a8dcff"],
+  1: ["#c25c0a", "#e5760f", "#ff8a1f", "#ffab5c", "#ffc891"],
+};
+
+/**
  * How far ahead of the hit line notes are visible, in seconds.
  *
  * Longer than a touchscreen rhythm game would use. Moving a whole arm into
@@ -91,11 +100,32 @@ export class DuelSession {
   /** Reused per-frame render state — never reallocated. */
   private laneFlash = new Float32Array(8);
   private popups: { lane: number; judgement: Judgement; ageMs: number }[] = [];
+  /**
+   * Lane colours.
+   *
+   * These used to ramp blue -> amber across the lanes, which was a real
+   * mistake: amber is the OPPONENT's accent everywhere else in the UI, so the
+   * top lanes looked like they belonged to the other player. Colour has to keep
+   * meaning one thing.
+   *
+   * Now every lane is the player's own hue and pitch is carried by brightness
+   * instead — low lanes deep, high lanes pale. That reads as a keyboard without
+   * borrowing a colour that already means something.
+   */
   private theme: HighwayTheme = {
-    laneColors: ["#2ea8ff", "#5cc8ff", "#8fe0ff", "#ffc46b", "#ff8a1f", "#ff6b3d"],
+    laneColors: SEAT_LANE_COLORS[0],
     accent: "#2ea8ff",
     dim: false,
   };
+
+  /** Recolour the highway for the seat this player is sitting in. */
+  setSeat(seat: 0 | 1): void {
+    this.theme = {
+      laneColors: SEAT_LANE_COLORS[seat],
+      accent: seat === 0 ? "#2ea8ff" : "#ff8a1f",
+      dim: false,
+    };
+  }
 
   private judgementSeq = 0;
   private lastJudgement: JudgementSignal | null = null;

@@ -123,12 +123,7 @@ export function PlayScreen({
     : { name: "Open seat", score: 0, connected: false };
 
   const youRail = (
-    <YouRail
-      you={you}
-      side={youOnLeft ? "left" : "right"}
-      videoRef={videoRef}
-      overlayCanvasRef={overlayCanvasRef}
-    />
+    <YouRail you={you} side={youOnLeft ? "left" : "right"} />
   );
   const oppRail = (
     <OpponentRail opponent={opponent} side={youOnLeft ? "right" : "left"} />
@@ -166,7 +161,40 @@ export function PlayScreen({
            * and the renderer lays out from the CSS box it is given, so a taller
            * ratio costs nothing and nothing is ever letterboxed.
            */}
-          <div className="relative aspect-[3/4] h-full max-w-full bg-field">
+          <div className="relative aspect-[3/4] h-full max-w-full overflow-hidden bg-field">
+            {/*
+             * The camera sits BEHIND the notes, filling the same box.
+             *
+             * This is the difference between a rhythm game and an air
+             * instrument. With the feed in a corner thumbnail your eyes track
+             * falling notes in the middle of the screen while your hands work
+             * against a 270px picture somewhere else, and every strike needs a
+             * mental translation between the two. Sharing one box removes that
+             * entirely: lane 3 on the highway is literally where your hand is
+             * in lane 3 of the video, so you aim at the note itself.
+             *
+             * Mirrored, because a player expects to move right and see their
+             * hand go right. The overlay canvas above is deliberately NOT
+             * mirrored — landmark coordinates are already in view space.
+             */}
+            <video
+              ref={videoRef}
+              playsInline
+              muted
+              aria-hidden
+              className="pointer-events-none absolute inset-0 h-full w-full scale-x-[-1] object-cover opacity-45 brightness-[0.55] saturate-50"
+            />
+            <canvas
+              ref={overlayCanvasRef}
+              aria-hidden
+              className="pointer-events-none absolute inset-0 h-full w-full"
+            />
+            {/* Darken toward the top so distant notes keep contrast against a
+                bright room, while your hands stay visible near the hit line. */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 bg-gradient-to-b from-stage/85 via-stage/45 to-transparent"
+            />
             <HighwayCanvas canvasRef={highwayCanvasRef} />
             <LaneOverlay
               lanes={chart.lanes}
@@ -269,13 +297,9 @@ const RAIL =
 const YouRail = memo(function YouRail({
   you,
   side,
-  videoRef,
-  overlayCanvasRef,
 }: {
   you: PlayScreenPlayer;
   side: "left" | "right";
-  videoRef: RefObject<HTMLVideoElement | null>;
-  overlayCanvasRef: RefObject<HTMLCanvasElement | null>;
 }) {
   // Inboard alignment: the combo hugs the highway, so it lands inside the same
   // glance that reads the notes.
@@ -296,11 +320,8 @@ const YouRail = memo(function YouRail({
         />
       </div>
 
-      <CameraMonitor
-        videoRef={videoRef}
-        overlayCanvasRef={overlayCanvasRef}
-        seat={you.seat}
-      />
+      {/* The camera used to live here. It now sits behind the highway so your
+          hands and the notes share one space — see the play area above. */}
     </aside>
   );
 });

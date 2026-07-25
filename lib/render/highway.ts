@@ -195,7 +195,10 @@ export class HighwayRenderer {
     this.drawFlashes(state.laneFlash, reduced, dimK);
     this.drawNotes(chart, t, look, lanes, dimK);
     this.drawHitLine(dimK);
-    this.drawLaneLabels(chart, lanes, dimK);
+    // Lane labels are drawn in the DOM by LaneOverlay, which gets real
+    // typography and stays crisp at any DPR. Drawing them here too printed
+    // every pitch name twice, a few pixels apart.
+    // this.drawLaneLabels(chart, lanes, dimK);
     this.drawPopups(state.popups, reduced, dimK);
 
     ctx.globalAlpha = 1;

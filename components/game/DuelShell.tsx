@@ -58,6 +58,8 @@ const UI_POLL_MS = 80;
 const CALIBRATION_BEATS = 8;
 const CALIBRATION_BPM = 100;
 const CALIBRATION_LEAD_SEC = 1.2;
+/** Solo count-in. Matches the networked lead so the feel is identical. */
+const COUNTDOWN_SEC = 3.2;
 
 interface SideState {
   name: string;
@@ -95,6 +97,8 @@ export function DuelShell() {
    * session must be handed the *current* chart, so it reads this instead.
    */
   const chartRef = useRef<Chart | null>(null);
+  /** Seat, mirrored for the same stale-closure reason as the chart. */
+  const seatRef = useRef<0 | 1>(0);
 
   // ── React state: things a human changes at human speed ──────────────────
   const [phase, setPhase] = useState<Phase>("title");
@@ -127,6 +131,8 @@ export function DuelShell() {
   );
   const [paused, setPaused] = useState(false);
 
+  /** Solo practice: same chart, judging and highway, no room and no opponent. */
+  const [solo, setSolo] = useState(false);
   const [opponent, setOpponent] = useState<SideState | null>(null);
   const [roundSummaries, setRoundSummaries] = useState<
     { you: RoundSummary; opponent: RoundSummary | null }[]
@@ -151,6 +157,8 @@ export function DuelShell() {
   useEffect(() => {
     const other = players.find((p) => p.id !== youId);
     setOpponentReady(other?.ready ?? false);
+    const mine = players.find((p) => p.id === youId);
+    if (mine) seatRef.current = mine.seat;
   }, [players, youId]);
 
   const you = players.find((p) => p.id === youId);
@@ -166,8 +174,21 @@ export function DuelShell() {
       const session = sessionRef.current;
       if (!session) return;
 
-      setChartTimeSec(session.chartTimeSec());
+      const t = session.chartTimeSec();
+      setChartTimeSec(t);
       setScore(session.getScore());
+
+      // A chart is one continuous run whose rounds are sections inside it, so
+      // the active round has to be derived from the clock. Without this the
+      // scorebug froze on "R1" and its countdown sat at 0:00 while notes were
+      // still falling — it was reporting round 1's end time forever.
+      const active = chartRef.current?.rounds.findIndex(
+        (r) => t >= r.startSec && t < r.endSec,
+      );
+      if (active !== undefined && active >= 0 && active !== roundRef.current) {
+        roundRef.current = active;
+        setRound(active);
+      }
 
       const j = session.takeJudgement();
       if (j) setLastJudgement((prev) => (prev?.id === j.id ? prev : j));
@@ -420,6 +441,9 @@ export function DuelShell() {
           const activeChart = chartRef.current;
           if (!ctx || !activeChart) return;
 
+          // Your own notes render in YOUR accent, so the highway agrees with
+          // the scorebug about which colour means "me".
+          session.setSeat(seatRef.current);
           // Install the chart on the SESSION, not just in React state. Without
           // this the session has no notes to draw, no lanes to strike, and
           // startAt() bails — which renders as a black highway and a dead game.
@@ -447,11 +471,20 @@ export function DuelShell() {
       window.clearInterval(id);
       session.stopChart();
       const summary = session.getRoundSummary(roundRef.current);
+      if (solo) {
+        // No opponent to wait on, and no server to declare a winner.
+        setRoundSummaries([{ you: summary, opponent: null }]);
+        setWinnerId(null);
+        void fetchCommentary(roundRef.current, summary, null);
+        setPhase("result");
+        return;
+      }
       clientRef.current?.sendRoundDone(summary);
       setPhase("roundBreak");
     }, 120);
     return () => window.clearInterval(id);
-  }, [phase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, solo]);
 
   const handleRoundResult = useCallback(
     (m: {
@@ -516,6 +549,69 @@ export function DuelShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHost, code, chart, chartLoading]);
 
+  /**
+   * Solo practice.
+   *
+   * Deliberately runs the exact same chart, judge, highway and scoring as a
+   * duel — it just never opens a socket and has no opponent. Anything that
+   * behaved differently here would train the wrong reflexes, and it also means
+   * the whole game is testable without a second person.
+   */
+  const startSolo = useCallback(async () => {
+    setSolo(true);
+    setNetError(null);
+    setChartError(null);
+    setRoundSummaries([]);
+    setOpponent(null);
+    setYouId("solo");
+    setChartLoading(true);
+    try {
+      const res = await fetch("/api/chart", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ song: pickSeed(), difficulty: "easy" }),
+      });
+      const data = await res.json();
+      const built: Chart = data.chart;
+      chartRef.current = built;
+      setChart(built);
+      if (data.warning) setChartError(data.warning);
+
+      const session = await bootSession();
+      const ctx = session.engine.context;
+      if (!ctx) return;
+      session.setSeat(0);
+      session.setChart(built, calibrationSecRef.current);
+
+      roundRef.current = 0;
+      setRound(0);
+      // Local countdown: there is no server to agree with, so just count in.
+      setPhase("countdown");
+      const startAudio = ctx.currentTime + COUNTDOWN_SEC;
+      scheduleCountIn(session.engine, startAudio - 4 * (60 / built.bpm), built.bpm);
+      const startedAt = performance.now();
+      const tick = () => {
+        const left = COUNTDOWN_SEC - (performance.now() - startedAt) / 1000;
+        setCountdownLeft(Math.max(0, left));
+        if (left <= 0) {
+          session.startAt(ctx.currentTime + 0.05);
+          setPhase("playing");
+          return;
+        }
+        window.setTimeout(tick, 60);
+      };
+      tick();
+    } catch (err) {
+      setNetError(
+        err instanceof Error ? err.message : "Could not start practice",
+      );
+      setPhase("title");
+      setSolo(false);
+    } finally {
+      setChartLoading(false);
+    }
+  }, [bootSession]);
+
   useEffect(() => {
     return () => {
       sessionRef.current?.dispose();
@@ -569,9 +665,7 @@ export function DuelShell() {
           onJoin={handleJoin}
           connecting={connecting}
           error={netError}
-          onPractice={() => {
-            window.location.href = "/practice";
-          }}
+          onPractice={() => void startSolo()}
         />
       )}
 
@@ -734,10 +828,17 @@ export function DuelShell() {
             setRoundSummaries([]);
             setRoundReady(false);
             setOpponentReady(false);
-            setPhase("lobby");
+            if (solo) {
+              void startSolo();
+            } else {
+              setPhase("lobby");
+            }
           }}
           onExit={() => {
-            clientRef.current?.disconnect();
+            if (!solo) clientRef.current?.disconnect();
+            setSolo(false);
+            setChart(null);
+            chartRef.current = null;
             setPhase("title");
           }}
         />
