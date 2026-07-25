@@ -17,5 +17,6 @@ yarn-error.log*
 next-env.d.ts
 tsconfig.tsbuildinfo
 
-# Vendored MediaPipe wasm + model (fetch with `npm run vendor:vision`)
-public/vision
+# Vendored MediaPipe wasm + model ARE committed on purpose: serving them
+# same-origin removes an 8MB cross-origin fetch on every cold load and lets the
+# game work offline. Refresh them with `npm run vendor:vision`.
