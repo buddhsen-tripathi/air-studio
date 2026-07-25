@@ -59,6 +59,8 @@ function makeHand(opts: {
   /** Fingertips in engine order: index, middle, ring, pinky, thumb. */
   tips: [Pt, Pt, Pt, Pt, Pt];
   extended: [boolean, boolean, boolean, boolean, boolean];
+  /** Defaults to "right"; set explicitly when testing two hands at once. */
+  handedness?: "left" | "right";
 }): TrackedHand {
   const lms = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
   const put = (i: number, p: Pt) => {
@@ -87,7 +89,11 @@ function makeHand(opts: {
     ]);
   }
 
-  return { handedness: "right", score: 1, landmarks: lms };
+  return {
+    handedness: opts.handedness ?? "right",
+    score: 1,
+    landmarks: lms,
+  };
 }
 
 const ALL_EXTENDED: [boolean, boolean, boolean, boolean, boolean] = [
@@ -338,6 +344,55 @@ export async function GET() {
       hits: hits.length,
       expected: 1,
       pass: hits.length === 1,
+    };
+  }
+
+  // --- 13. fingerCount is PER HAND, not global.
+  //
+  // In single-finger mode the duel still has to register the index finger of
+  // BOTH hands — otherwise two-lane chords become unplayable and the left hand
+  // is dead weight. `live` is computed inside the per-slot loop, so each hand
+  // gets its own allowance; this proves it rather than trusting the reading.
+  {
+    const { p, hits } = fresh({ ...base, fingerCount: 1 });
+    const frames = 16;
+    for (let i = 0; i < frames; i++) {
+      const y = 0.25 + (0.7 * i) / (frames - 1);
+      // Left hand's index over zone A, right hand's index over zone B. Every
+      // other finger is parked far off to the side and curled.
+      const parked: [Pt, Pt, Pt, Pt] = [
+        [0.02, 0.05],
+        [0.02, 0.05],
+        [0.02, 0.05],
+        [0.02, 0.05],
+      ];
+      p.update({
+        hands: [
+          makeHand({
+            handedness: "left",
+            palmY: y + 0.35,
+            tips: [[0.35, y], ...parked] as [Pt, Pt, Pt, Pt, Pt],
+            extended: [true, false, false, false, false],
+          }),
+          makeHand({
+            handedness: "right",
+            palmY: y + 0.35,
+            tips: [[0.55, y], ...parked] as [Pt, Pt, Pt, Pt, Pt],
+            extended: [true, false, false, false, false],
+          }),
+        ],
+        timestampMs: 1000 + i * 16,
+        inferenceMs: 5,
+        captureLatencyMs: null,
+      });
+    }
+    const voices = hits.map((h) => h.voice).sort();
+    results.bothHandsRegisterInSingleFingerMode = {
+      hits: hits.length,
+      expected: 2,
+      pass: hits.length === 2 && voices.join(",") === "kick,snare",
+      voices,
+      note: "one index finger per hand => 2 strikers, so 2-lane chords still work",
     };
   }
 
