@@ -15,7 +15,43 @@ import "server-only";
 
 const ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "anthropic/claude-sonnet-4.5";
-const DEFAULT_TIMEOUT_MS = 45_000;
+const DEFAULT_TIMEOUT_MS = 60_000;
+
+/**
+ * Reasoning effort, sent to models that support it.
+ *
+ * ── Why this defaults to "minimal" ────────────────────────────────────────
+ * Measured against openai/gpt-5-nano on our own chart prompt:
+ *
+ *   default effort, 4000 tok   57.0s   3968 reasoning tokens   NO CONTENT
+ *   effort "low",   4000 tok   16.7s   1536 reasoning tokens   ok
+ *   effort "minimal"            5.4s      0 reasoning tokens   ok
+ *
+ * At default effort the model spent its ENTIRE token budget thinking and
+ * returned an empty completion with finish_reason "length" — which is exactly
+ * the "model returned an empty response" failure this app kept hitting, and the
+ * cause of chart generation timing out.
+ *
+ * Our prompts do the structural thinking already: the chart prompt asks for a
+ * step-string spec that is rhythmically valid by construction, and the layout
+ * prompt carries the ergonomic rules explicitly. There is very little left for
+ * the model to reason about, so paying 4000 tokens and a minute of latency for
+ * it is pure loss. Override with OPENROUTER_REASONING_EFFORT if a future model
+ * genuinely benefits.
+ *
+ * Models without a reasoning mode ignore the field.
+ */
+const REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
+type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+const DEFAULT_REASONING_EFFORT: ReasoningEffort = "minimal";
+
+export function configuredReasoningEffort(): ReasoningEffort | null {
+  const raw = process.env.OPENROUTER_REASONING_EFFORT?.trim().toLowerCase();
+  if (raw === "off" || raw === "none") return null;
+  return (REASONING_EFFORTS as readonly string[]).includes(raw ?? "")
+    ? (raw as ReasoningEffort)
+    : DEFAULT_REASONING_EFFORT;
+}
 
 export class OpenRouterError extends Error {
   constructor(
@@ -79,8 +115,9 @@ export async function chat(opts: ChatOptions): Promise<string> {
   if (first.finishReason === "length") {
     throw new OpenRouterError(
       `Model "${configuredModel()}" hit the token limit before emitting any content ` +
-        `(${first.completionTokens ?? 0} completion tokens used). If this is a reasoning ` +
-        `model, its thinking consumed the whole budget — raise maxTokens or use a non-reasoning model.`,
+        `(${first.completionTokens ?? 0} completion tokens used, reasoning effort ` +
+        `"${configuredReasoningEffort() ?? "off"}"). Its thinking consumed the whole ` +
+        `budget — lower OPENROUTER_REASONING_EFFORT or raise maxTokens.`,
       502,
     );
   }
@@ -130,6 +167,8 @@ async function callOnce(
     ? AbortSignal.any([opts.signal, timeout])
     : timeout;
 
+  const effort = configuredReasoningEffort();
+
   let response: Response;
   try {
     response = await fetch(ENDPOINT, {
@@ -147,6 +186,7 @@ async function callOnce(
         messages: opts.messages,
         temperature: opts.temperature ?? 0.7,
         max_tokens: opts.maxTokens ?? 2000,
+        ...(effort ? { reasoning: { effort } } : {}),
         ...(useJsonFormat ? { response_format: { type: "json_object" } } : {}),
       }),
       signal,
