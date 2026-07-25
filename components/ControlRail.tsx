@@ -21,6 +21,8 @@ const FINGER_LABELS = [
 export interface StudioSettings {
   masterGain: number;
   space: number;
+  /** 0..0.8 — how much the camera feed is darkened so zones stand out. */
+  cameraDim: number;
   showSkeleton: boolean;
   showPrediction: boolean;
 }
@@ -165,6 +167,17 @@ export function ControlRail({
         onChange={(space) => patchSettings({ space })}
         format={(v) => `${Math.round(v * 100)}%`}
         hint="Reverb send."
+      />
+
+      <Slider
+        label="Camera dim"
+        value={settings.cameraDim}
+        min={0}
+        max={0.8}
+        step={0.05}
+        onChange={(cameraDim) => patchSettings({ cameraDim })}
+        format={(v) => `${Math.round(v * 100)}%`}
+        hint="Darkens the video so the pads stand out. Raise it in bright rooms."
       />
 
       <div className="mt-3 space-y-2 border-t border-edge pt-3">

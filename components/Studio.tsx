@@ -39,6 +39,7 @@ type Status = "idle" | "starting" | "running" | "error";
 const DEFAULT_SETTINGS: StudioSettings = {
   masterGain: 0.9,
   space: DEFAULT_LAYOUT.space,
+  cameraDim: 0.4,
   showSkeleton: true,
   showPrediction: true,
 };
@@ -229,7 +230,9 @@ export default function Studio() {
               muted
               // Mirrored so the player sees themselves as in a mirror. Landmark
               // coordinates are mirrored to match inside HandTracker, so the
-              // canvas on top needs no transform of its own.
+              // canvas on top needs no transform of its own. Dimming is applied
+              // to the video only — the zone overlay above keeps full contrast.
+              style={{ filter: `brightness(${1 - settings.cameraDim})` }}
               className="absolute inset-0 h-full w-full scale-x-[-1] object-cover"
             />
             <canvas

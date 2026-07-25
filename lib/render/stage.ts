@@ -128,15 +128,16 @@ export class StageRenderer {
 
     ctx.save();
 
-    // Fill: nearly transparent at rest so the player can still see themselves.
+    // Fill: solid enough to read over a bright room — the camera-dim setting
+    // is what keeps the player visible, not overlay transparency.
     ctx.beginPath();
     roundRect(ctx, x, y, zw, zh, radius);
-    ctx.fillStyle = withAlpha(color, 0.05 + heat * 0.32 * velocity + (hovered ? 0.07 : 0));
+    ctx.fillStyle = withAlpha(color, 0.13 + heat * 0.32 * velocity + (hovered ? 0.09 : 0));
     ctx.fill();
 
     // Border brightens with hit energy.
-    ctx.lineWidth = 1 + heat * 2.5;
-    ctx.strokeStyle = withAlpha(color, 0.35 + heat * 0.65 + (hovered ? 0.2 : 0));
+    ctx.lineWidth = 1.75 + heat * 2.5;
+    ctx.strokeStyle = withAlpha(color, 0.6 + heat * 0.4 + (hovered ? 0.2 : 0));
     if (heat > 0) {
       ctx.shadowColor = withAlpha(color, 0.8 * heat);
       ctx.shadowBlur = 24 * heat * (0.4 + velocity);
@@ -149,16 +150,16 @@ export class StageRenderer {
     if (zone.trigger === "strike") {
       ctx.beginPath();
       ctx.setLineDash([5, 6]);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = withAlpha(color, 0.28 + heat * 0.5);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = withAlpha(color, 0.5 + heat * 0.5);
       ctx.moveTo(x + 6, b.midY * h);
       ctx.lineTo(x + zw - 6, b.midY * h);
       ctx.stroke();
       ctx.setLineDash([]);
     } else if (zone.trigger === "cross") {
       ctx.beginPath();
-      ctx.lineWidth = 1.5 + heat * 2;
-      ctx.strokeStyle = withAlpha(color, 0.5 + heat * 0.5);
+      ctx.lineWidth = 2 + heat * 2;
+      ctx.strokeStyle = withAlpha(color, 0.65 + heat * 0.35);
       ctx.moveTo(b.midX * w, y + 4);
       ctx.lineTo(b.midX * w, y + zh - 4);
       ctx.stroke();
@@ -184,7 +185,7 @@ export class StageRenderer {
     const compact = zw < 64;
     const label = zone.label;
 
-    ctx.font = `500 ${compact ? 10 : 11}px ui-monospace, SF Mono, Menlo, monospace`;
+    ctx.font = `600 ${compact ? 12 : 14}px ui-monospace, SF Mono, Menlo, monospace`;
     ctx.textBaseline = "top";
 
     // Narrow "cross" strings get a rotated label so it fits the column.
@@ -193,7 +194,7 @@ export class StageRenderer {
       ctx.translate(x + zw / 2, y + zh - 6);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "left";
-      ctx.fillStyle = withAlpha(color, 0.55 + heat * 0.45);
+      ctx.fillStyle = withAlpha(color, 0.85 + heat * 0.15);
       ctx.fillText(label, 0, -4);
       ctx.restore();
       return;
@@ -201,15 +202,15 @@ export class StageRenderer {
 
     ctx.textAlign = "left";
     // Shadow keeps the label legible over a bright shirt or a window behind you.
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
     ctx.fillText(label, x + 9, y + 8);
-    ctx.fillStyle = withAlpha(color, 0.7 + heat * 0.3);
+    ctx.fillStyle = withAlpha(color, 0.9 + heat * 0.1);
     ctx.fillText(label, x + 8, y + 7);
 
     if (zone.hand !== "any") {
-      ctx.font = "500 9px ui-monospace, SF Mono, Menlo, monospace";
-      ctx.fillStyle = withAlpha(color, 0.4);
-      ctx.fillText(zone.hand === "left" ? "L" : "R", x + 8, y + 21);
+      ctx.font = "500 10px ui-monospace, SF Mono, Menlo, monospace";
+      ctx.fillStyle = withAlpha(color, 0.6);
+      ctx.fillText(zone.hand === "left" ? "L" : "R", x + 8, y + 26);
     }
   }
 

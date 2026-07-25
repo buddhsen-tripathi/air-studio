@@ -19,3 +19,4 @@ tsconfig.tsbuildinfo
 
 # Vendored MediaPipe wasm + model (fetch with `npm run vendor:vision`)
 public/vision
+.gstack/
