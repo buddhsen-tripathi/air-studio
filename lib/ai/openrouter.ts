@@ -49,12 +49,80 @@ export interface ChatOptions {
   signal?: AbortSignal;
 }
 
+/** Shape of the bits of the OpenRouter response we actually read. */
+interface ChatCompletion {
+  choices?: {
+    finish_reason?: string;
+    native_finish_reason?: string;
+    message?: {
+      // Models variously return a string, or content parts, or nothing at all
+      // with the text in `reasoning`.
+      content?: string | { type?: string; text?: string }[] | null;
+      reasoning?: string | null;
+    };
+  }[];
+  error?: { message?: string; code?: number };
+  usage?: { completion_tokens?: number };
+}
+
 export async function chat(opts: ChatOptions): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new OpenRouterError("OPENROUTER_API_KEY is not set", 503);
   }
 
+  const first = await callOnce(apiKey, opts, opts.json ?? false);
+  if (first.text) return first.text;
+
+  // Empty content is almost always one of three things, and they need different
+  // fixes — so diagnose rather than reporting a bare "empty response".
+  if (first.finishReason === "length") {
+    throw new OpenRouterError(
+      `Model "${configuredModel()}" hit the token limit before emitting any content ` +
+        `(${first.completionTokens ?? 0} completion tokens used). If this is a reasoning ` +
+        `model, its thinking consumed the whole budget — raise maxTokens or use a non-reasoning model.`,
+      502,
+    );
+  }
+
+  if (opts.json) {
+    // Some models on OpenRouter accept `response_format: json_object` and then
+    // return nothing rather than erroring. Retry once without it; the prompts
+    // already demand raw JSON, and extractJson tolerates prose or fences.
+    const retry = await callOnce(apiKey, opts, false);
+    if (retry.text) return retry.text;
+    if (retry.finishReason === "length") {
+      throw new OpenRouterError(
+        `Model "${configuredModel()}" ran out of tokens before producing content.`,
+        502,
+      );
+    }
+  }
+
+  const hint = first.hadReasoning
+    ? ` The model emitted reasoning but no answer content, which usually means it is a reasoning model that needs a larger token budget.`
+    : ` Check that "${configuredModel()}" is a valid OpenRouter slug that supports chat completions.`;
+
+  throw new OpenRouterError(
+    `Model "${configuredModel()}" returned an empty response` +
+      (first.finishReason ? ` (finish_reason: ${first.finishReason}).` : ".") +
+      hint,
+    502,
+  );
+}
+
+interface CallResult {
+  text: string | null;
+  finishReason?: string;
+  hadReasoning: boolean;
+  completionTokens?: number;
+}
+
+async function callOnce(
+  apiKey: string,
+  opts: ChatOptions,
+  useJsonFormat: boolean,
+): Promise<CallResult> {
   // Compose the caller's signal with our own timeout so a hung upstream cannot
   // pin a serverless invocation open indefinitely.
   const timeout = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
@@ -79,7 +147,7 @@ export async function chat(opts: ChatOptions): Promise<string> {
         messages: opts.messages,
         temperature: opts.temperature ?? 0.7,
         max_tokens: opts.maxTokens ?? 2000,
-        ...(opts.json ? { response_format: { type: "json_object" } } : {}),
+        ...(useJsonFormat ? { response_format: { type: "json_object" } } : {}),
       }),
       signal,
     });
@@ -101,20 +169,35 @@ export async function chat(opts: ChatOptions): Promise<string> {
     );
   }
 
-  const data = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
-    error?: { message?: string };
-  };
+  const data = (await response.json()) as ChatCompletion;
 
   if (data.error) {
     throw new OpenRouterError(data.error.message ?? "Unknown model error", 502);
   }
 
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new OpenRouterError("Model returned an empty response", 502);
+  const choice = data.choices?.[0];
+  const message = choice?.message;
+  const text = normalizeContent(message?.content);
+
+  return {
+    text: text && text.trim() ? text : null,
+    finishReason: choice?.finish_reason ?? choice?.native_finish_reason,
+    hadReasoning: Boolean(message?.reasoning?.trim()),
+    completionTokens: data.usage?.completion_tokens,
+  };
+}
+
+/** `content` may be a plain string or an array of content parts. */
+function normalizeContent(
+  content: string | { type?: string; text?: string }[] | null | undefined,
+): string | null {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part?.text === "string" ? part.text : ""))
+      .join("");
   }
-  return content;
+  return null;
 }
 
 /**

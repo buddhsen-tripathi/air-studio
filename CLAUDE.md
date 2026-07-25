@@ -53,6 +53,42 @@ Drawing is a separate `requestAnimationFrame` loop in `components/Studio.tsx`
 that reads the same refs. `lib/render/stage.ts` is a plain class, not a
 component, on purpose.
 
+## Multi-finger triggering (read before touching `updateStrike`)
+
+Every fingertip is an independent striker — index, middle, ring, pinky, thumb,
+in that order. `config.fingerCount` takes a prefix of that list;
+`config.striker: "palm"` collapses to a single point at the palm centre.
+
+The non-obvious part:
+
+> **Triggering is per finger. Arming is per (zone, hand).**
+
+Any fingertip crossing a pad's trigger line can fire it, but once fired the pad
+is disarmed for that entire hand until *every* live finger has lifted back above
+it (`probeStrike` computes `allClear`).
+
+This is not an optimisation, it's the thing that makes five fingers usable. An
+open hand sweeping down through one pad has its tips cross the line tens to
+hundreds of milliseconds apart depending on hand tilt and speed — measured at
+154ms for a steeply raked hand at 1.2 units/sec. Per-finger cooldown cannot
+collapse that (the gap is 2x the 70ms cooldown); it comes out as a flam. Chords
+still work because separate zones keep separate state.
+
+Corollaries that must hold:
+
+- `hold`/`pinch` zones sound **one voice per (zone, hand)**, not per finger —
+  resting three fingers in a pad is one note. `holdKey` is `zoneId:slotIndex`
+  with no finger component.
+- `cross` (strum) zones track side from the hand's **mean x**, so a spread hand
+  plucks a string once. Velocity comes from the fastest finger.
+- `probeStrike` writes into a preallocated scratch object (`this.probe`) because
+  it runs per zone per hand per frame.
+
+`app/api/fingertest/route.ts` is a dev-only harness covering all of this — five
+fingers on one pad, chords across two pads, single-finger mode, re-arming, palm
+mode, and the tilted-hand flam case. Hit `curl localhost:3000/api/fingertest`
+after changing the trigger engine.
+
 ## Coordinate space
 
 All zone and landmark coordinates are **normalized 0..1 in mirrored view space** —

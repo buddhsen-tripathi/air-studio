@@ -1,7 +1,16 @@
 "use client";
 
-import type { PerformerConfig } from "@/lib/vision/performer";
+import { MAX_FINGERS, type PerformerConfig } from "@/lib/vision/performer";
 import { Panel, SegmentedControl, Slider } from "./ui";
+
+/** Cumulative labels: the slider takes a prefix of the finger list. */
+const FINGER_LABELS = [
+  "Index",
+  "+ Middle",
+  "+ Ring",
+  "+ Pinky",
+  "All five",
+];
 
 /**
  * Calibration. Every control here changes how the instrument *feels*, and the
@@ -81,14 +90,59 @@ export function ControlRail({
       />
 
       <SegmentedControl<PerformerConfig["striker"]>
-        label="Strike point"
+        label="Strike with"
         value={config.striker}
         onChange={(striker) => patch({ striker })}
         options={[
-          { value: "index", label: "Fingertip" },
+          { value: "fingers", label: "Fingertips" },
           { value: "palm", label: "Palm" },
         ]}
       />
+
+      {config.striker === "fingers" && (
+        <>
+          <Slider
+            label="Fingers"
+            value={config.fingerCount}
+            min={1}
+            max={MAX_FINGERS}
+            step={1}
+            onChange={(fingerCount) => patch({ fingerCount })}
+            format={(v) => FINGER_LABELS[Math.round(v) - 1] ?? `${v}`}
+            hint="Each fingertip triggers independently, so you can strike several zones at once."
+          />
+
+          <SegmentedControl<PerformerConfig["strikeMotion"]>
+            label="Trigger on"
+            value={config.strikeMotion}
+            onChange={(strikeMotion) => patch({ strikeMotion })}
+            options={[
+              { value: "either", label: "Both" },
+              { value: "hand", label: "Hand" },
+              { value: "finger", label: "Finger" },
+            ]}
+          />
+          <p className="-mt-1 mb-1 text-[11px] leading-snug text-ink-faint">
+            {config.strikeMotion === "hand"
+              ? "Only whole-hand strokes play. Natural for drums."
+              : config.strikeMotion === "finger"
+                ? "Only finger movement relative to your hand plays, so you can hold a chord shape still and press notes individually."
+                : "Whole-hand strokes and individual finger presses both play."}
+          </p>
+
+          <Toggle
+            label="Curled fingers don't play"
+            checked={config.requireExtendedFingers}
+            onChange={(requireExtendedFingers) =>
+              patch({ requireExtendedFingers })
+            }
+          />
+          <p className="mt-1 text-[11px] leading-snug text-ink-faint">
+            Only extended fingers trigger, so a relaxed hand passing over a pad
+            stays silent. Curled fingertips show as hollow outlines.
+          </p>
+        </>
+      )}
 
       <div className="my-3 border-t border-edge" />
 

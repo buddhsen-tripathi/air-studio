@@ -47,7 +47,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       ],
       json: true,
       temperature: 0.8,
-      maxTokens: 2500,
+      // A 10-zone layout is a lot of JSON, and reasoning models spend budget
+      // before emitting any of it. Generous here is cheaper than a failed call.
+      maxTokens: 8000,
       signal: request.signal,
     });
 

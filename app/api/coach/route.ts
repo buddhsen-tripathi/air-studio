@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<NextResponse> {
       ],
       json: true,
       temperature: 0.6,
-      maxTokens: 800,
+      maxTokens: 3000,
       signal: request.signal,
     });
 

@@ -31,15 +31,29 @@ export const HAND_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
   [0, 17],                                  // palm base
 ];
 
-/** Landmark indices we actually care about, named. */
+/**
+ * Landmark indices we actually care about, named.
+ *
+ * The PIP/IP joints matter as much as the tips: comparing a tip's distance from
+ * the wrist against its middle joint's is how we tell an extended finger from a
+ * curled one, which is what separates a deliberate play from a resting hand.
+ */
 export const LM = {
   wrist: 0,
+  thumbMcp: 2,
+  thumbIp: 3,
   thumbTip: 4,
   indexMcp: 5,
+  indexPip: 6,
   indexTip: 8,
+  middleMcp: 9,
+  middlePip: 10,
   middleTip: 12,
+  ringMcp: 13,
+  ringPip: 14,
   ringTip: 16,
   pinkyMcp: 17,
+  pinkyPip: 18,
   pinkyTip: 20,
 } as const;
 

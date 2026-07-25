@@ -1,6 +1,10 @@
 import { zoneBounds, zoneColor, type Layout, type Zone } from "@/lib/layout/types";
 import { HAND_CONNECTIONS } from "@/lib/vision/handTracker";
-import type { HandState, Performer } from "@/lib/vision/performer";
+import type {
+  HandState,
+  Performer,
+  StrikerState,
+} from "@/lib/vision/performer";
 
 /**
  * Canvas overlay renderer.
@@ -75,7 +79,11 @@ export class StageRenderer {
     for (const hand of hands) {
       if (!hand.present) continue;
       if (options.showSkeleton) this.drawSkeleton(hand);
-      this.drawStriker(hand, options);
+      // Every live fingertip is an independent striker, so every one gets a
+      // marker. The index finger is drawn largest as a visual anchor.
+      for (let i = 0; i < hand.strikers.length; i++) {
+        this.drawStriker(hand, hand.strikers[i], i === 0, options);
+      }
     }
   }
 
@@ -100,16 +108,20 @@ export class StageRenderer {
     const heat = age < FLASH_MS ? 1 - age / FLASH_MS : 0;
     const velocity = flash?.velocity ?? 0;
 
-    // Is a striker hovering over this zone right now? Hover gets a subtle lift
-    // so the player can find a pad without having to hit it first.
+    // Is any striker hovering over this zone right now? Hover gets a subtle
+    // lift so the player can find a pad without having to hit it first.
     const hovered = hands.some(
       (hand) =>
         hand.present &&
         (zone.hand === "any" || zone.hand === hand.handedness) &&
-        hand.px >= b.left &&
-        hand.px <= b.right &&
-        hand.py >= b.top &&
-        hand.py <= b.bottom,
+        hand.strikers.some(
+          (s) =>
+            s.armedToPlay &&
+            s.px >= b.left &&
+            s.px <= b.right &&
+            s.py >= b.top &&
+            s.py <= b.bottom,
+        ),
     );
 
     const radius = Math.min(14, zw * 0.18, zh * 0.18);
@@ -230,17 +242,39 @@ export class StageRenderer {
     ctx.restore();
   }
 
-  private drawStriker(hand: HandState, options: RenderOptions): void {
+  private drawStriker(
+    hand: HandState,
+    striker: StrikerState,
+    primary: boolean,
+    options: RenderOptions,
+  ): void {
     const { ctx, width: w, height: h } = this;
-    const cx = hand.x * w;
-    const cy = hand.y * h;
-    const px = hand.px * w;
-    const py = hand.py * h;
+    const cx = striker.x * w;
+    const cy = striker.y * h;
+    const px = striker.px * w;
+    const py = striker.py * h;
 
     // Speed drives the ring size, giving continuous feedback about how hard the
     // next hit will land — before it lands.
-    const energy = Math.min(1, hand.speed / 2.6);
+    const energy = Math.min(1, striker.speed / 2.6);
     const accent = hand.pinched ? "#ffb454" : "#4ade9b";
+    // Secondary fingers are drawn smaller and dimmer: they are fully live, but
+    // showing five identical dots turns the stage into confetti.
+    const scale = primary ? 1 : 0.62;
+    const fade = primary ? 1 : 0.6;
+
+    // A curled finger cannot trigger. Drawing it as a hollow outline answers
+    // "why didn't that play?" without the player having to guess.
+    if (!striker.armedToPlay) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3.5 * scale, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(232,236,244,0.3)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
 
     ctx.save();
 
@@ -249,7 +283,7 @@ export class StageRenderer {
       // prediction slider is wrong, this is what makes it obvious.
       ctx.beginPath();
       ctx.setLineDash([3, 4]);
-      ctx.strokeStyle = withAlpha(accent, 0.35);
+      ctx.strokeStyle = withAlpha(accent, 0.35 * fade);
       ctx.lineWidth = 1;
       ctx.moveTo(cx, cy);
       ctx.lineTo(px, py);
@@ -257,23 +291,23 @@ export class StageRenderer {
       ctx.setLineDash([]);
 
       ctx.beginPath();
-      ctx.arc(px, py, 4, 0, Math.PI * 2);
-      ctx.strokeStyle = withAlpha(accent, 0.75);
+      ctx.arc(px, py, 4 * scale, 0, Math.PI * 2);
+      ctx.strokeStyle = withAlpha(accent, 0.75 * fade);
       ctx.lineWidth = 1.25;
       ctx.stroke();
     }
 
     ctx.beginPath();
-    ctx.arc(cx, cy, 6 + energy * 10, 0, Math.PI * 2);
-    ctx.strokeStyle = withAlpha(accent, 0.2 + energy * 0.5);
+    ctx.arc(cx, cy, (6 + energy * 10) * scale, 0, Math.PI * 2);
+    ctx.strokeStyle = withAlpha(accent, (0.2 + energy * 0.5) * fade);
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
     ctx.beginPath();
-    ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
-    ctx.fillStyle = accent;
+    ctx.arc(cx, cy, 4.5 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = withAlpha(accent, fade);
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 10 + energy * 14;
+    ctx.shadowBlur = (10 + energy * 14) * fade;
     ctx.fill();
 
     ctx.restore();

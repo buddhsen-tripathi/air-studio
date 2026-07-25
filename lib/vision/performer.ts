@@ -19,11 +19,45 @@ import { LM, type FrameResult, type TrackedHand } from "./handTracker";
  *
  * The UI reads this object's public fields once per animation frame to draw.
  * It never drives the audio.
+ *
+ * EVERY FINGER PLAYS. Each fingertip is an independent striker, so you can hold
+ * a chord across four keys and strike them together, or drum with two fingers.
+ * The subtlety that makes this work is in how arming is scoped — see
+ * `updateStrike`.
  */
+
+/** Striker order. `fingerCount` takes a prefix of this list. */
+export const FINGER_NAMES = [
+  "index",
+  "middle",
+  "ring",
+  "pinky",
+  "thumb",
+] as const;
+export type FingerName = (typeof FINGER_NAMES)[number];
+
+const FINGER_LANDMARKS = [
+  LM.indexTip,
+  LM.middleTip,
+  LM.ringTip,
+  LM.pinkyTip,
+  LM.thumbTip,
+];
+/** Middle joint of each finger, in the same order — used for curl detection. */
+const FINGER_JOINTS = [
+  LM.indexPip,
+  LM.middlePip,
+  LM.ringPip,
+  LM.pinkyPip,
+  LM.thumbIp,
+];
+const FINGER_COUNT = FINGER_NAMES.length;
+/** Thumb is the last entry and needs a different curl test. */
+const THUMB_INDEX = 4;
 
 export interface PerformerConfig {
   /**
-   * Milliseconds of forward prediction. We extrapolate the striker along its
+   * Milliseconds of forward prediction. We extrapolate each striker along its
    * velocity vector before testing zone crossings.
    *
    * This is the key trick for feel. There is ~40-80ms of unavoidable latency
@@ -37,8 +71,29 @@ export interface PerformerConfig {
   sensitivity: number;
   /** Minimum ms between two hits on the same zone by the same hand. */
   cooldownMs: number;
-  /** Which landmark acts as the drumstick tip. */
-  striker: "index" | "palm";
+  /** Strike with the fingertips, or with a single point at the palm centre. */
+  striker: "fingers" | "palm";
+  /**
+   * How many fingertips are live, taking a prefix of FINGER_NAMES:
+   * 1 = index only, 2 = +middle, 3 = +ring, 4 = +pinky, 5 = +thumb.
+   */
+  fingerCount: number;
+  /**
+   * Only extended fingers can trigger. This is what makes playing a *gesture*
+   * rather than a matter of presence: a relaxed or curled hand drifting over a
+   * pad does nothing, and you choose which fingers are live by extending them.
+   */
+  requireExtendedFingers: boolean;
+  /**
+   * Which motion counts as a strike.
+   *
+   * - `hand`   absolute fingertip velocity. Air-drumming: the whole arm swings.
+   * - `finger` fingertip velocity *relative to the palm*. Piano-style: the hand
+   *            hovers still and individual fingers press, so you can hold a
+   *            chord shape and play notes independently.
+   * - `either` whichever is greater. Supports both without switching modes.
+   */
+  strikeMotion: "hand" | "finger" | "either";
   smoothing: OneEuroConfig;
 }
 
@@ -46,7 +101,10 @@ export const DEFAULT_PERFORMER_CONFIG: PerformerConfig = {
   predictMs: 55,
   sensitivity: 0.5,
   cooldownMs: 70,
-  striker: "index",
+  striker: "fingers",
+  fingerCount: FINGER_COUNT,
+  requireExtendedFingers: true,
+  strikeMotion: "either",
   smoothing: DEFAULT_ONE_EURO,
 };
 
@@ -59,6 +117,23 @@ export interface HitEvent {
   /** performance.now() timestamp of the hit. */
   tMs: number;
   hand: "left" | "right";
+  /** Which fingertip actually landed the hit. */
+  finger: FingerName | "palm";
+}
+
+/** One striker's drawable state. */
+export interface StrikerState {
+  name: FingerName | "palm";
+  x: number;
+  y: number;
+  /** Predicted position actually used for hit testing. */
+  px: number;
+  py: number;
+  speed: number;
+  /** Whether the finger is extended, i.e. currently able to trigger. */
+  extended: boolean;
+  /** Whether this striker can fire right now (extension gate applied). */
+  armedToPlay: boolean;
 }
 
 /** Per-hand state the renderer draws. */
@@ -66,14 +141,8 @@ export interface HandState {
   slot: number;
   handedness: "left" | "right";
   present: boolean;
-  /** Smoothed striker position in view space. */
-  x: number;
-  y: number;
-  /** Predicted position actually used for hit testing. */
-  px: number;
-  py: number;
-  speed: number;
   pinched: boolean;
+  strikers: StrikerState[];
   /** Raw landmarks for skeleton rendering. */
   landmarks: { x: number; y: number; z: number }[] | null;
 }
@@ -83,30 +152,57 @@ const HIT_HISTORY = 128;
 /** Downward speed (normalized units/sec) needed to register the softest hit. */
 const MIN_STRIKE_SPEED = 0.35;
 const MAX_STRIKE_SPEED = 3.2;
-/** Vertical distance the striker must rise before a zone re-arms. */
+/** Vertical distance a striker must rise before a zone re-arms. */
 const REARM_MARGIN = 0.035;
 const PINCH_ON = 0.42;
 const PINCH_OFF = 0.55;
+/**
+ * Finger-extension thresholds, as the ratio of tip-to-wrist distance over
+ * joint-to-wrist distance. An extended finger measures ~1.5-1.8; a curled one
+ * drops below 1.0 because the tip folds back toward the palm. Separate on/off
+ * values stop a half-curled finger from flickering in and out of play.
+ */
+const EXTEND_ON = 1.18;
+const EXTEND_OFF = 1.04;
 
 interface HandSlot {
   handedness: "left" | "right";
   present: boolean;
-  tip: SmoothedPoint;
+  /** One smoothed point per fingertip, indexed by FINGER_NAMES. */
+  fingers: SmoothedPoint[];
+  /** Whether each finger is currently extended, with hysteresis applied. */
+  extended: boolean[];
   palm: SmoothedPoint;
-  thumb: SmoothedPoint;
   pinched: boolean;
   landmarks: { x: number; y: number; z: number }[] | null;
-  /** Per-zone arm/cooldown state, keyed by zone id. */
+  /**
+   * Arm/cooldown state per zone, per HAND — deliberately not per finger.
+   * See `updateStrike` for why.
+   */
   zoneState: Map<string, ZoneState>;
 }
 
 interface ZoneState {
   armed: boolean;
   lastHitMs: number;
-  /** For `cross` zones: which side of the string the striker was on. */
+  /** For `cross` zones: which side of the string the hand was on. */
   side: number;
   /** For `hold`/`pinch` zones: whether this hand is currently sounding it. */
   holding: boolean;
+}
+
+/** Scratch object reused every frame so the hot path allocates nothing. */
+interface StrikeProbe {
+  /** Whether any live striker is past the trigger line at all. */
+  hasHit: boolean;
+  /** Highest downward velocity among strikers past the trigger line. */
+  bestVy: number;
+  /** Predicted x of that striker, for timbre. */
+  bestX: number;
+  /** Finger index, or -1 when striking with the palm. */
+  bestFinger: number;
+  /** True if every live striker is above the line or outside the zone. */
+  allClear: boolean;
 }
 
 export class Performer {
@@ -126,17 +222,28 @@ export class Performer {
   fps = 0;
   private lastFrameMs = 0;
 
+  /** Reused scratch, never escapes the frame. */
+  private probe: StrikeProbe = {
+    hasHit: false,
+    bestVy: 0,
+    bestX: 0,
+    bestFinger: -1,
+    allClear: true,
+  };
+
   /** Optional sink for hit events (used to feed the on-screen note ribbon). */
   onHit: ((hit: HitEvent) => void) | null = null;
 
   constructor(private engine: AudioEngine) {
     for (let i = 0; i < MAX_HANDS; i++) {
+      const fingers: SmoothedPoint[] = [];
+      for (let f = 0; f < FINGER_COUNT; f++) fingers.push(new SmoothedPoint());
       this.slots.push({
         handedness: i === 0 ? "left" : "right",
         present: false,
-        tip: new SmoothedPoint(),
+        fingers,
+        extended: new Array(FINGER_COUNT).fill(true),
         palm: new SmoothedPoint(),
-        thumb: new SmoothedPoint(),
         pinched: false,
         landmarks: null,
         zoneState: new Map(),
@@ -154,11 +261,13 @@ export class Performer {
   }
 
   setConfig(config: PerformerConfig): void {
-    this.config = config;
+    this.config = {
+      ...config,
+      fingerCount: Math.max(1, Math.min(FINGER_COUNT, config.fingerCount)),
+    };
     for (const slot of this.slots) {
-      slot.tip.setConfig(config.smoothing);
+      for (const finger of slot.fingers) finger.setConfig(config.smoothing);
       slot.palm.setConfig(config.smoothing);
-      slot.thumb.setConfig(config.smoothing);
     }
   }
 
@@ -169,18 +278,31 @@ export class Performer {
   /** Snapshot for rendering. Allocates, so call it once per *draw*, not per hit. */
   getHandStates(): HandState[] {
     const predictSec = this.config.predictMs / 1000;
+    const usePalm = this.config.striker === "palm";
+    const live = usePalm ? 1 : this.config.fingerCount;
+
     return this.slots.map((slot, i) => {
-      const p = this.strikerPoint(slot);
+      const strikers: StrikerState[] = [];
+      for (let f = 0; f < live; f++) {
+        const point = usePalm ? slot.palm : slot.fingers[f];
+        const extended = usePalm ? true : slot.extended[f];
+        strikers.push({
+          name: usePalm ? "palm" : FINGER_NAMES[f],
+          x: point.x,
+          y: point.y,
+          px: point.x + point.vx * predictSec,
+          py: point.y + point.vy * predictSec,
+          speed: point.speed,
+          extended,
+          armedToPlay: this.canStrike(slot, f, usePalm),
+        });
+      }
       return {
         slot: i,
         handedness: slot.handedness,
         present: slot.present,
-        x: p.x,
-        y: p.y,
-        px: p.x + p.vx * predictSec,
-        py: p.y + p.vy * predictSec,
-        speed: p.speed,
         pinched: slot.pinched,
+        strikers,
         landmarks: slot.landmarks,
       };
     });
@@ -200,9 +322,8 @@ export class Performer {
     this.engine.allNotesOff();
     for (const slot of this.slots) {
       slot.present = false;
-      slot.tip.reset();
+      for (const finger of slot.fingers) finger.reset();
       slot.palm.reset();
-      slot.thumb.reset();
       for (const state of slot.zoneState.values()) state.holding = false;
     }
   }
@@ -223,8 +344,6 @@ export class Performer {
     const layout = this.layout;
     if (!layout) return;
 
-    const predictSec = this.config.predictMs / 1000;
-
     for (let s = 0; s < this.slots.length; s++) {
       const slot = this.slots[s];
       if (!slot.present) {
@@ -233,9 +352,7 @@ export class Performer {
         continue;
       }
 
-      const point = this.strikerPoint(slot);
-      const px = point.x + point.vx * predictSec;
-      const py = point.y + point.vy * predictSec;
+      const live = this.liveStrikerCount();
 
       for (const zone of layout.zones) {
         if (zone.hand !== "any" && zone.hand !== slot.handedness) continue;
@@ -243,16 +360,16 @@ export class Performer {
 
         switch (zone.trigger) {
           case "strike":
-            this.updateStrike(zone, state, slot, s, px, py, point.vy, frame);
+            this.updateStrike(zone, state, slot, s, live, frame);
             break;
           case "cross":
-            this.updateCross(zone, state, slot, s, px, py, point.vx, frame);
+            this.updateCross(zone, state, slot, s, live, frame);
             break;
           case "hold":
-            this.updateHold(zone, state, slot, s, px, py, false);
+            this.updateHold(zone, state, slot, s, live, false);
             break;
           case "pinch":
-            this.updateHold(zone, state, slot, s, px, py, true);
+            this.updateHold(zone, state, slot, s, live, true);
             break;
         }
       }
@@ -261,46 +378,162 @@ export class Performer {
 
   // ------------------------------------------------------------------ triggers
 
+  /**
+   * Strike detection across every live fingertip.
+   *
+   * The important design decision is that ARMING IS PER (ZONE, HAND), not per
+   * finger, while TRIGGERING is per finger. Any fingertip crossing the line can
+   * fire the pad, but once it fires, the pad is disarmed for that whole hand
+   * until *every* live finger has lifted back above it.
+   *
+   * Without that, an open hand sweeping down through one pad fires it five
+   * times in a row — each fingertip crosses a few tens of milliseconds apart, so
+   * a per-finger cooldown wouldn't catch it either. It would sound like a flam
+   * instead of a hit.
+   *
+   * Chords still work, because separate zones keep separate state: index over C
+   * and ring over E strike independently.
+   */
   private updateStrike(
     zone: Zone,
     state: ZoneState,
     slot: HandSlot,
     slotIndex: number,
-    px: number,
-    py: number,
-    vy: number,
+    live: number,
     frame: FrameResult,
   ): void {
     const b = zoneBounds(zone);
-    const insideX = px >= b.left && px <= b.right;
+    const probe = this.probeStrike(
+      slot,
+      live,
+      b.left,
+      b.right,
+      b.midY,
+      b.bottom,
+    );
 
-    if (!insideX) {
-      // Leaving sideways re-arms, so you can sweep across a kit and hit each
-      // pad once rather than needing to lift between every drum.
-      state.armed = true;
-      return;
-    }
-
-    if (py < b.midY - REARM_MARGIN) {
+    // Every live finger is clear of the pad: re-arm it. Leaving sideways counts,
+    // so you can sweep across a kit and hit each pad once rather than needing to
+    // lift between every drum.
+    if (probe.allClear) {
       state.armed = true;
       return;
     }
 
     if (!state.armed) return;
-    if (py < b.midY) return;
-    if (py > b.bottom + 0.12) return; // far past the pad: not a strike
+    if (!probe.hasHit) return;
 
     const threshold = this.strikeThreshold();
-    if (vy < threshold) return;
+    if (probe.bestVy < threshold) return;
     if (frame.timestampMs - state.lastHitMs < this.config.cooldownMs) return;
 
     state.armed = false;
     state.lastHitMs = frame.timestampMs;
 
-    const velocity = this.velocityCurve(vy, threshold);
+    const velocity = this.velocityCurve(probe.bestVy, threshold);
     // Where along the pad you hit sets the timbre, like a real drum head.
-    const tone = clamp01((px - b.left) / Math.max(1e-3, zone.w));
-    this.fire(zone, slot, velocity, tone, frame.timestampMs);
+    const tone = clamp01((probe.bestX - b.left) / Math.max(1e-3, zone.w));
+    this.fire(zone, slot, velocity, tone, frame.timestampMs, probe.bestFinger);
+  }
+
+  /**
+   * Scan the live strikers once, recording the fastest one past the trigger
+   * line and whether the pad is fully clear. Writes into reusable scratch so
+   * the hot path stays allocation-free.
+   */
+  private probeStrike(
+    slot: HandSlot,
+    live: number,
+    left: number,
+    right: number,
+    midY: number,
+    bottom: number,
+  ): StrikeProbe {
+    const probe = this.probe;
+    probe.hasHit = false;
+    probe.bestVy = -Infinity;
+    probe.bestX = 0;
+    probe.bestFinger = -1;
+    probe.allClear = true;
+
+    const predictSec = this.config.predictMs / 1000;
+    const usePalm = this.config.striker === "palm";
+
+    for (let f = 0; f < live; f++) {
+      const point = usePalm ? slot.palm : slot.fingers[f];
+      if (!point.live) continue;
+      // A curled finger is not playing. Skipping it here also keeps it out of
+      // the `allClear` test, so a folded finger resting on a pad neither fires
+      // it nor blocks it from re-arming.
+      if (!this.canStrike(slot, f, usePalm)) continue;
+
+      const px = point.x + point.vx * predictSec;
+      const py = point.y + point.vy * predictSec;
+
+      const insideX = px >= left && px <= right;
+      if (!insideX) continue;
+
+      // Still within re-arm range of the line, so the pad is not clear yet.
+      if (py >= midY - REARM_MARGIN) probe.allClear = false;
+
+      if (py < midY) continue;
+      if (py > bottom + 0.12) continue; // far past the pad: not a strike
+
+      const vy = this.strikeVelocity(point.vy, slot.palm.vy, usePalm);
+      if (vy > probe.bestVy) {
+        probe.hasHit = true;
+        probe.bestVy = vy;
+        probe.bestX = px;
+        probe.bestFinger = usePalm ? -1 : f;
+      }
+    }
+
+    return probe;
+  }
+
+  /** Recompute per-finger extension with hysteresis. */
+  private updateExtension(
+    slot: HandSlot,
+    lms: { x: number; y: number }[],
+    wrist: { x: number; y: number },
+    pinkyMcp: { x: number; y: number },
+  ): void {
+    for (let f = 0; f < FINGER_COUNT; f++) {
+      const ratio = fingerExtensionRatio(lms, f, wrist, pinkyMcp);
+      slot.extended[f] = slot.extended[f]
+        ? ratio > EXTEND_OFF
+        : ratio > EXTEND_ON;
+    }
+  }
+
+  /** Whether a striker is currently allowed to fire. */
+  private canStrike(slot: HandSlot, finger: number, usePalm: boolean): boolean {
+    if (usePalm) return true;
+    if (!this.config.requireExtendedFingers) return true;
+    return slot.extended[finger] === true;
+  }
+
+  /**
+   * Velocity that counts as a strike, per `strikeMotion`.
+   *
+   * Subtracting palm velocity is what lets you keep a hand still over a chord
+   * and press one finger: whole-hand drift cancels out, so only the finger's
+   * own movement registers.
+   */
+  private strikeVelocity(
+    tipV: number,
+    palmV: number,
+    usePalm: boolean,
+  ): number {
+    if (usePalm) return tipV;
+    switch (this.config.strikeMotion) {
+      case "hand":
+        return tipV;
+      case "finger":
+        return tipV - palmV;
+      default:
+        return Math.max(tipV, tipV - palmV);
+    }
   }
 
   private updateCross(
@@ -308,16 +541,53 @@ export class Performer {
     state: ZoneState,
     slot: HandSlot,
     slotIndex: number,
-    px: number,
-    py: number,
-    vx: number,
+    live: number,
     frame: FrameResult,
   ): void {
     const b = zoneBounds(zone);
-    const insideY = py >= b.top && py <= b.bottom;
-    const side = px < b.midX ? -1 : 1;
+    const predictSec = this.config.predictMs / 1000;
+    const usePalm = this.config.striker === "palm";
 
-    if (!insideY) {
+    // A spread hand sweeping through a string should pluck it once, not once
+    // per finger, so side tracking uses the hand's mean x. Velocity still comes
+    // from the fastest finger.
+    let sumX = 0;
+    let counted = 0;
+    let maxSpeed = 0;
+    let anyInsideY = false;
+    let toneY = b.top;
+    let fastestFinger = -1;
+
+    for (let f = 0; f < live; f++) {
+      const point = usePalm ? slot.palm : slot.fingers[f];
+      if (!point.live) continue;
+      if (!this.canStrike(slot, f, usePalm)) continue;
+
+      const px = point.x + point.vx * predictSec;
+      const py = point.y + point.vy * predictSec;
+      sumX += px;
+      counted++;
+
+      if (py < b.top || py > b.bottom) continue;
+      anyInsideY = true;
+      const speed = Math.abs(
+        this.strikeVelocity(point.vx, slot.palm.vx, usePalm),
+      );
+      if (speed > maxSpeed) {
+        maxSpeed = speed;
+        toneY = py;
+        fastestFinger = usePalm ? -1 : f;
+      }
+    }
+
+    if (counted === 0) return;
+
+    const meanX = sumX / counted;
+    const side = meanX < b.midX ? -1 : 1;
+
+    if (!anyInsideY) {
+      // Keep tracking which side the hand is on, so re-entering the string's
+      // vertical span doesn't register as a phantom crossing.
       state.side = side;
       return;
     }
@@ -326,16 +596,15 @@ export class Performer {
     state.side = side;
     if (!crossed) return;
 
-    const speed = Math.abs(vx);
     const threshold = this.strikeThreshold() * 0.7; // strumming is gentler
-    if (speed < threshold) return;
+    if (maxSpeed < threshold) return;
     if (frame.timestampMs - state.lastHitMs < this.config.cooldownMs) return;
 
     state.lastHitMs = frame.timestampMs;
-    const velocity = this.velocityCurve(speed, threshold);
+    const velocity = this.velocityCurve(maxSpeed, threshold);
     // Height on the string sets brightness: near the bridge is brighter.
-    const tone = 1 - clamp01((py - b.top) / Math.max(1e-3, zone.h));
-    this.fire(zone, slot, velocity, tone, frame.timestampMs);
+    const tone = 1 - clamp01((toneY - b.top) / Math.max(1e-3, zone.h));
+    this.fire(zone, slot, velocity, tone, frame.timestampMs, fastestFinger);
   }
 
   private updateHold(
@@ -343,12 +612,35 @@ export class Performer {
     state: ZoneState,
     slot: HandSlot,
     slotIndex: number,
-    px: number,
-    py: number,
+    live: number,
     requirePinch: boolean,
   ): void {
     const b = zoneBounds(zone);
-    const inside = px >= b.left && px <= b.right && py >= b.top && py <= b.bottom;
+    const predictSec = this.config.predictMs / 1000;
+    const usePalm = this.config.striker === "palm";
+
+    // One voice per zone per hand: resting three fingers in a pad should sound
+    // one note, not three. Any finger inside sustains it.
+    let inside = false;
+    let depthSum = 0;
+    let depthCount = 0;
+
+    for (let f = 0; f < live; f++) {
+      const point = usePalm ? slot.palm : slot.fingers[f];
+      if (!point.live) continue;
+      // Holding a pad is also a deliberate act: a curled finger inside it
+      // should not sustain a note.
+      if (!this.canStrike(slot, f, usePalm)) continue;
+
+      const px = point.x + point.vx * predictSec;
+      const py = point.y + point.vy * predictSec;
+      if (px < b.left || px > b.right || py < b.top || py > b.bottom) continue;
+
+      inside = true;
+      depthSum += 1 - clamp01((py - b.top) / Math.max(1e-3, zone.h));
+      depthCount++;
+    }
+
     const active = inside && (!requirePinch || slot.pinched);
     const key = holdKey(zone.id, slotIndex);
 
@@ -363,10 +655,9 @@ export class Performer {
     } else if (!active && state.holding) {
       state.holding = false;
       this.engine.holdOff(key);
-    } else if (active) {
+    } else if (active && depthCount > 0) {
       // Vertical position inside the zone opens the filter while you hold.
-      const depth = 1 - clamp01((py - b.top) / Math.max(1e-3, zone.h));
-      this.engine.holdModulate(key, depth);
+      this.engine.holdModulate(key, depthSum / depthCount);
     }
   }
 
@@ -376,6 +667,7 @@ export class Performer {
     velocity: number,
     tone: number,
     tMs: number,
+    finger: number,
   ): void {
     this.engine.noteOn(zone.voice, {
       velocity,
@@ -393,6 +685,7 @@ export class Performer {
       velocity,
       tMs,
       hand: slot.handedness,
+      finger: finger >= 0 ? FINGER_NAMES[finger] : "palm",
     };
     this.history.push(event);
     if (this.history.length > HIT_HISTORY) this.history.shift();
@@ -400,6 +693,10 @@ export class Performer {
   }
 
   // ------------------------------------------------------------------ helpers
+
+  private liveStrikerCount(): number {
+    return this.config.striker === "palm" ? 1 : this.config.fingerCount;
+  }
 
   /** Sensitivity 1.0 -> easiest to trigger. */
   private strikeThreshold(): number {
@@ -418,10 +715,6 @@ export class Performer {
       (speed - threshold) / Math.max(0.1, MAX_STRIKE_SPEED - threshold),
     );
     return 0.32 + 0.68 * Math.pow(t, 0.65);
-  }
-
-  private strikerPoint(slot: HandSlot): SmoothedPoint {
-    return this.config.striker === "palm" ? slot.palm : slot.tip;
   }
 
   private zoneStateFor(slot: HandSlot, zoneId: string): ZoneState {
@@ -472,9 +765,8 @@ export class Performer {
       if (!hand) {
         if (slot.present) {
           slot.present = false;
-          slot.tip.reset();
+          for (const finger of slot.fingers) finger.reset();
           slot.palm.reset();
-          slot.thumb.reset();
           slot.landmarks = null;
         }
         continue;
@@ -485,14 +777,17 @@ export class Performer {
       slot.landmarks = hand.landmarks;
 
       const lms = hand.landmarks;
-      const tip = lms[LM.indexTip];
-      const thumb = lms[LM.thumbTip];
+      for (let f = 0; f < FINGER_COUNT; f++) {
+        const point = lms[FINGER_LANDMARKS[f]];
+        if (point) slot.fingers[f].update(point.x, point.y, tMs);
+      }
+
       const wrist = lms[LM.wrist];
       const indexMcp = lms[LM.indexMcp];
       const pinkyMcp = lms[LM.pinkyMcp];
 
-      slot.tip.update(tip.x, tip.y, tMs);
-      slot.thumb.update(thumb.x, thumb.y, tMs);
+      this.updateExtension(slot, lms, wrist, pinkyMcp);
+
       slot.palm.update(
         (wrist.x + indexMcp.x + pinkyMcp.x) / 3,
         (wrist.y + indexMcp.y + pinkyMcp.y) / 3,
@@ -501,6 +796,8 @@ export class Performer {
 
       // Normalize the pinch distance by hand size so it behaves the same
       // whether you are close to the camera or across the room.
+      const tip = lms[LM.indexTip];
+      const thumb = lms[LM.thumbTip];
       const palmSpan = Math.max(
         1e-3,
         Math.hypot(wrist.x - indexMcp.x, wrist.y - indexMcp.y),
@@ -516,6 +813,34 @@ export class Performer {
   }
 }
 
+/**
+ * Decide which fingers are extended.
+ *
+ * A finger is extended when its tip is further from the wrist than its middle
+ * joint is; curl it and the tip folds back toward the palm, inverting that.
+ * Using a *ratio* of the two distances makes the test scale-free, so it behaves
+ * identically whether the hand is close to the camera or across the room, and
+ * it needs no depth information.
+ *
+ * The thumb folds sideways rather than inward, so it is measured against the
+ * pinky knuckle instead of the wrist.
+ */
+function fingerExtensionRatio(
+  lms: { x: number; y: number }[],
+  finger: number,
+  wrist: { x: number; y: number },
+  pinkyMcp: { x: number; y: number },
+): number {
+  const tip = lms[FINGER_LANDMARKS[finger]];
+  const joint = lms[FINGER_JOINTS[finger]];
+  if (!tip || !joint) return 0;
+
+  const anchor = finger === THUMB_INDEX ? pinkyMcp : wrist;
+  const jointDist = Math.hypot(joint.x - anchor.x, joint.y - anchor.y);
+  if (jointDist < 1e-4) return 0;
+  return Math.hypot(tip.x - anchor.x, tip.y - anchor.y) / jointDist;
+}
+
 function holdKey(zoneId: string, slotIndex: number): string {
   return `${zoneId}:${slotIndex}`;
 }
@@ -523,3 +848,6 @@ function holdKey(zoneId: string, slotIndex: number): string {
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
+
+/** Exported for the settings UI. */
+export const MAX_FINGERS = FINGER_COUNT;

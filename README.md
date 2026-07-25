@@ -30,6 +30,11 @@ pad rig, and a split bass+drums kit. Zones respond to four gesture types:
 | `hold`   | hand rests inside the zone                 | pads, drones    |
 | `pinch`  | thumb + index pinched inside the zone      | sustained notes |
 
+**All ten fingers play.** Each fingertip is an independent striker, so you can
+hold a chord across four keys and strike them together, drum with two fingers, or
+strum with a spread hand. A whole-hand sweep through a single pad still counts as
+one hit rather than five — see the note on arming below.
+
 Velocity comes from how fast your hand is moving as it crosses, so soft ghost
 notes and hard accents are both available. Where in the zone you land sets
 timbre.
@@ -157,7 +162,17 @@ The **Feel** panel is where an unresponsive session gets fixed:
 - **Retrigger gap** — raise if one stroke double-triggers a pad.
 - **Steadiness** — how fast smoothing gets out of the way. Higher tracks fast
   strokes tightly; lower is calmer but laggier.
-- **Strike point** — fingertip is precise, palm is more forgiving.
+- **Strike with / Fingers** — fingertips are precise, palm is more forgiving.
+  Drop the finger count if a relaxed hand causes stray hits; raise it for chords.
+
+### One hand, one hit
+
+Fingertips are independent triggers, but *arming* is per pad per hand: once any
+finger fires a pad, it stays disarmed until every live finger lifts back above
+it. Without that, an open hand crossing one pad fires it once per fingertip — and
+because the tips cross up to ~150ms apart on a tilted hand, no retrigger gap can
+absorb it. You'd hear a flam instead of a hit. Chords are unaffected, since
+separate zones keep separate state.
 
 ---
 
