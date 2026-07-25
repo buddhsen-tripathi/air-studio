@@ -1,4 +1,5 @@
 import { zoneBounds, zoneColor, type Layout, type Zone } from "@/lib/layout/types";
+import { SpriteCache } from "@/lib/render/sprites";
 import { HAND_CONNECTIONS } from "@/lib/vision/handTracker";
 import type {
   HandState,
@@ -35,13 +36,21 @@ export class StageRenderer {
   private height = 0;
   private dpr = 1;
 
+  private sprites: SpriteCache;
+
   constructor(
     private canvas: HTMLCanvasElement,
     private performer: Performer,
+    /**
+     * Share the game's cache when there is one — the glow sprites are keyed by
+     * colour and radius, so the highway and this overlay reuse each other's.
+     */
+    sprites?: SpriteCache,
   ) {
     const ctx = canvas.getContext("2d", { alpha: true });
     if (!ctx) throw new Error("StageRenderer: 2d context unavailable");
     this.ctx = ctx;
+    this.sprites = sprites ?? new SpriteCache();
   }
 
   /** Match the canvas backing store to its CSS size at device resolution. */
@@ -134,15 +143,25 @@ export class StageRenderer {
     ctx.fillStyle = withAlpha(color, 0.05 + heat * 0.32 * velocity + (hovered ? 0.07 : 0));
     ctx.fill();
 
+    // Hit glow, drawn from a cached sprite rather than with shadowBlur.
+    // shadowBlur re-runs a full gaussian on every stroke, every frame, for every
+    // flashing zone — it is the most expensive call in the 2D API and it was
+    // costing us frames while MediaPipe inference shares the same thread. The
+    // sprite is rasterised once and composited additively, which looks the same
+    // and is effectively free.
+    if (heat > 0) {
+      const glow = this.sprites.glow(color, 48);
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.globalAlpha = 0.55 * heat * (0.4 + velocity);
+      ctx.drawImage(glow, x - 12, y - 12, zw + 24, zh + 24);
+      ctx.restore();
+    }
+
     // Border brightens with hit energy.
     ctx.lineWidth = 1 + heat * 2.5;
     ctx.strokeStyle = withAlpha(color, 0.35 + heat * 0.65 + (hovered ? 0.2 : 0));
-    if (heat > 0) {
-      ctx.shadowColor = withAlpha(color, 0.8 * heat);
-      ctx.shadowBlur = 24 * heat * (0.4 + velocity);
-    }
     ctx.stroke();
-    ctx.shadowBlur = 0;
 
     // The trigger line: the exact plane the strike is measured against. Showing
     // it is what turns "why didn't that fire?" into an obvious answer.
@@ -303,11 +322,20 @@ export class StageRenderer {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    // Fingertip glow: same sprite substitution as the zone flash above. There
+    // are up to ten of these on screen at once, so a per-fingertip gaussian was
+    // the single worst thing in this renderer.
+    const halo = this.sprites.glow(accent, 24);
+    const haloR = (14 + energy * 16) * scale;
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = (0.5 + energy * 0.4) * fade;
+    ctx.drawImage(halo, cx - haloR, cy - haloR, haloR * 2, haloR * 2);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.globalAlpha = 1;
+
     ctx.beginPath();
     ctx.arc(cx, cy, 4.5 * scale, 0, Math.PI * 2);
     ctx.fillStyle = withAlpha(accent, fade);
-    ctx.shadowColor = accent;
-    ctx.shadowBlur = (10 + energy * 14) * fade;
     ctx.fill();
 
     ctx.restore();
