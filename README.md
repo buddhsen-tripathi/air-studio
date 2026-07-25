@@ -59,6 +59,16 @@ OPENROUTER_API_KEY=sk-or-v1-...
 OPENROUTER_MODEL=anthropic/claude-sonnet-4.5
 ```
 
+If a model call fails, the app falls back to the offline arranger and shows why.
+Two things are worth knowing:
+
+- **Reasoning models need headroom.** If the model spends its whole token budget
+  thinking, it returns no content. The error names the finish reason and token
+  count when that happens; raise the budget or pick a non-reasoning model.
+- **Not every model honours `response_format: json_object`.** Some accept it and
+  then return nothing. The client retries once without it automatically, since
+  the prompts already demand raw JSON.
+
 Both are optional. Without a key, the arranger and coach fall back to
 deterministic local implementations — the offline coach really does measure
 timing jitter and dynamic range, it isn't a stub. The key is read server-side
@@ -164,6 +174,22 @@ The **Feel** panel is where an unresponsive session gets fixed:
   strokes tightly; lower is calmer but laggier.
 - **Strike with / Fingers** — fingertips are precise, palm is more forgiving.
   Drop the finger count if a relaxed hand causes stray hits; raise it for chords.
+
+### Playing is a gesture, not presence
+
+Two things stop a hand that merely drifts over a pad from playing it:
+
+- **Curled fingers don't play.** Only extended fingers trigger, so you choose
+  which fingers are live by extending them — curl your ring and pinky and only
+  index and middle play. Curled fingertips render as hollow outlines, so it's
+  always visible why something didn't fire.
+- **Trigger on: Hand / Finger / Both.** _Hand_ uses absolute motion, natural for
+  drumming. _Finger_ measures your fingertip against your palm, so whole-hand
+  drift is ignored and you can hold a chord shape still while pressing notes
+  individually — piano-style. _Both_ (default) accepts either.
+
+If you're getting stray hits, switch **Trigger on** to _Finger_. If notes are
+being missed, check the fingertip markers aren't hollow.
 
 ### One hand, one hit
 

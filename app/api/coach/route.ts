@@ -58,6 +58,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json(payload);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[coach] model call failed:", message);
     const payload: CoachResponse = {
       report: localCoach(input.hits, input.tempo),
       source: "fallback",

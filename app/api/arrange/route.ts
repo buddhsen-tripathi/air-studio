@@ -71,6 +71,7 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch (err) {
     // A model failure must never leave the player without an instrument.
     const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[arrange] model call failed:", message);
     const payload: ArrangeResponse = {
       layout: localArrange(input),
       source: "fallback",

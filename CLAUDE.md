@@ -74,6 +74,27 @@ hundreds of milliseconds apart depending on hand tilt and speed — measured at
 collapse that (the gap is 2x the 70ms cooldown); it comes out as a flam. Chords
 still work because separate zones keep separate state.
 
+### Playing is a gesture, not presence
+
+Two gates keep a hand that is merely *near* a zone from playing it:
+
+- **Extension gate** (`requireExtendedFingers`, default on). A finger only
+  triggers when extended. `fingerExtensionRatio` compares tip-to-anchor distance
+  against middle-joint-to-anchor distance; curl a finger and the tip folds back,
+  inverting the ratio. It's a *ratio*, so it is scale-free — same behaviour close
+  to the camera or across the room, and no depth needed. The thumb folds
+  sideways so it is measured against the pinky knuckle, not the wrist.
+  Thresholds have hysteresis (`EXTEND_ON` 1.18 / `EXTEND_OFF` 1.04).
+- **Motion source** (`strikeMotion`). `hand` uses absolute fingertip velocity
+  (air-drumming). `finger` subtracts palm velocity, so whole-hand drift cancels
+  and only the finger's own press counts — this is what lets you hold a chord
+  shape still and play notes individually. `either` (default) takes the max.
+
+The extension gate is applied in `canStrike` and deliberately runs *before* the
+`allClear` test, so a curled finger resting on a pad neither fires it nor blocks
+it from re-arming. It also gates `hold` zones — a curled finger inside a pad
+should not sustain a note.
+
 Corollaries that must hold:
 
 - `hold`/`pinch` zones sound **one voice per (zone, hand)**, not per finger —
@@ -84,10 +105,15 @@ Corollaries that must hold:
 - `probeStrike` writes into a preallocated scratch object (`this.probe`) because
   it runs per zone per hand per frame.
 
-`app/api/fingertest/route.ts` is a dev-only harness covering all of this — five
-fingers on one pad, chords across two pads, single-finger mode, re-arming, palm
-mode, and the tilted-hand flam case. Hit `curl localhost:3000/api/fingertest`
-after changing the trigger engine.
+`app/api/fingertest/route.ts` is a dev-only harness with 12 cases covering all
+of this — five fingers on one pad, chords across two pads, single-finger mode,
+re-arming, palm mode, the tilted-hand flam case, the extension gate on and off,
+and all three motion sources. Hit `curl localhost:3000/api/fingertest` after
+changing the trigger engine.
+
+Its `makeHand` helper synthesises PIP joints from the tip position, so extension
+is modelled by the same geometry the engine measures. If you place landmarks by
+hand in a new test and skip the joints, every finger reads as curled.
 
 ## Coordinate space
 

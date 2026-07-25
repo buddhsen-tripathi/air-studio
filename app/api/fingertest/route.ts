@@ -8,6 +8,14 @@ import {
 } from "@/lib/vision/performer";
 import type { FrameResult, TrackedHand } from "@/lib/vision/handTracker";
 
+/**
+ * Behavioural regression check for the multi-finger trigger engine, driven by
+ * synthetic landmark frames against a fake AudioEngine. Dev-only — this is a
+ * test harness, not a product endpoint.
+ *
+ * Run: `curl localhost:3000/api/fingertest`
+ */
+
 /** Records what the engine was asked to play. */
 function fakeEngine() {
   const hits: { voice: string; velocity: number }[] = [];
@@ -35,70 +43,114 @@ const LAYOUT: Layout = LayoutSchema.parse({
   ],
 });
 
-/** Build a 21-landmark hand with the fingertips we care about placed exactly. */
-function hand(tips: {
-  index: [number, number];
-  middle: [number, number];
-  ring: [number, number];
-  pinky: [number, number];
-  thumb: [number, number];
+type Pt = [number, number];
+
+/**
+ * Build a 21-landmark hand.
+ *
+ * Finger joints are synthesised from the tip so extension is modelled honestly:
+ * an extended finger's PIP sits partway between the anchor and the tip (ratio
+ * ~1.8), a curled one's sits beyond it (ratio ~0.7). That is exactly the
+ * geometry `fingerExtensionRatio` measures.
+ */
+function makeHand(opts: {
+  /** Vertical position of the wrist; the knuckles track just above it. */
+  palmY: number;
+  /** Fingertips in engine order: index, middle, ring, pinky, thumb. */
+  tips: [Pt, Pt, Pt, Pt, Pt];
+  extended: [boolean, boolean, boolean, boolean, boolean];
 }): TrackedHand {
   const lms = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
-  const put = (i: number, p: [number, number]) => {
+  const put = (i: number, p: Pt) => {
     lms[i] = { x: p[0], y: p[1], z: 0 };
   };
-  put(0, [0.5, 0.95]); // wrist
-  put(5, [0.45, 0.85]); // index MCP
-  put(17, [0.55, 0.85]); // pinky MCP
-  put(4, tips.thumb);
-  put(8, tips.index);
-  put(12, tips.middle);
-  put(16, tips.ring);
-  put(20, tips.pinky);
+
+  const wrist: Pt = [0.5, opts.palmY];
+  const indexMcp: Pt = [0.45, opts.palmY - 0.08];
+  const pinkyMcp: Pt = [0.55, opts.palmY - 0.08];
+  put(0, wrist);
+  put(5, indexMcp);
+  put(17, pinkyMcp);
+
+  const TIP_LM = [8, 12, 16, 20, 4];
+  const JOINT_LM = [6, 10, 14, 18, 3];
+
+  for (let f = 0; f < 5; f++) {
+    const tip = opts.tips[f];
+    // The thumb is measured against the pinky knuckle, not the wrist.
+    const anchor = f === 4 ? pinkyMcp : wrist;
+    const t = opts.extended[f] ? 0.55 : 1.45;
+    put(TIP_LM[f], tip);
+    put(JOINT_LM[f], [
+      anchor[0] + (tip[0] - anchor[0]) * t,
+      anchor[1] + (tip[1] - anchor[1]) * t,
+    ]);
+  }
+
   return { handedness: "right", score: 1, landmarks: lms };
 }
 
-/** Drive the performer through a downward sweep and return the hits produced. */
-function sweep(
-  config: Partial<PerformerConfig>,
-  xs: [number, number, number, number, number],
-  fromY: number,
-  toY: number,
-  frames: number,
-  startMs: number,
-  performer: Performer,
-) {
-  // Natural fingertip length offsets, so tips do not all cross at once.
-  const yOffsets = [0, 0.02, 0.035, 0.05, 0.015];
+const ALL_EXTENDED: [boolean, boolean, boolean, boolean, boolean] = [
+  true,
+  true,
+  true,
+  true,
+  true,
+];
+
+interface SweepOpts {
+  xs: [number, number, number, number, number];
+  fromY: number;
+  toY: number;
+  frames?: number;
+  startMs?: number;
+  extended?: [boolean, boolean, boolean, boolean, boolean];
+  /** Natural fingertip length offsets, so tips don't all cross at once. */
+  yOffsets?: [number, number, number, number, number];
+  /** When false, the palm stays put and only the fingertips travel. */
+  movePalm?: boolean;
+}
+
+function sweep(performer: Performer, o: SweepOpts): number {
+  const frames = o.frames ?? 16;
+  const startMs = o.startMs ?? 1000;
+  const extended = o.extended ?? ALL_EXTENDED;
+  const yOffsets = o.yOffsets ?? [0, 0.02, 0.035, 0.05, 0.015];
+  const movePalm = o.movePalm ?? true;
+
   for (let i = 0; i < frames; i++) {
     const t = i / (frames - 1);
-    const base = fromY + (toY - fromY) * t;
-    const frame: FrameResult = {
+    const base = o.fromY + (o.toY - o.fromY) * t;
+    performer.update({
       hands: [
-        hand({
-          index: [xs[0], base + yOffsets[0]],
-          middle: [xs[1], base + yOffsets[1]],
-          ring: [xs[2], base + yOffsets[2]],
-          pinky: [xs[3], base + yOffsets[3]],
-          thumb: [xs[4], base + yOffsets[4]],
+        makeHand({
+          palmY: movePalm ? base + 0.35 : 0.95,
+          tips: [
+            [o.xs[0], base + yOffsets[0]],
+            [o.xs[1], base + yOffsets[1]],
+            [o.xs[2], base + yOffsets[2]],
+            [o.xs[3], base + yOffsets[3]],
+            [o.xs[4], base + yOffsets[4]],
+          ],
+          extended,
         }),
       ],
       timestampMs: startMs + i * 16,
       inferenceMs: 5,
       captureLatencyMs: null,
-    };
-    performer.update(frame);
+    } satisfies FrameResult);
   }
   return startMs + frames * 16;
 }
 
-/**
- * Behavioural regression check for the multi-finger trigger engine, driven by
- * synthetic landmark frames against a fake AudioEngine. Dev-only — this is a
- * test harness, not a product endpoint.
- *
- * Run: `curl localhost:3000/api/fingertest`
- */
+function fresh(config: PerformerConfig, layout: Layout = LAYOUT) {
+  const { engine, hits } = fakeEngine();
+  const p = new Performer(engine);
+  p.setConfig(config);
+  p.setLayout(layout);
+  return { p, hits };
+}
+
 export async function GET() {
   if (process.env.NODE_ENV === "production") {
     return new NextResponse("Not found", { status: 404 });
@@ -111,30 +163,25 @@ export async function GET() {
     predictMs: 0,
     fingerCount: 5,
   };
+  const OVER_A: [number, number, number, number, number] = [
+    0.32, 0.35, 0.38, 0.4, 0.3,
+  ];
 
   // --- 1. Open hand, all five fingers over ONE pad. Must fire exactly once.
   {
-    const { engine, hits } = fakeEngine();
-    const p = new Performer(engine);
-    p.setConfig(base);
-    p.setLayout(LAYOUT);
-    sweep(base, [0.32, 0.35, 0.38, 0.40, 0.30], 0.25, 0.95, 16, 1000, p);
+    const { p, hits } = fresh(base);
+    sweep(p, { xs: OVER_A, fromY: 0.25, toY: 0.95 });
     results.oneZoneFiveFingers = {
       hits: hits.length,
       expected: 1,
       pass: hits.length === 1,
-      voices: hits.map((h) => h.voice),
     };
   }
 
   // --- 2. Hand spread across TWO pads. Both must fire (a chord).
   {
-    const { engine, hits } = fakeEngine();
-    const p = new Performer(engine);
-    p.setConfig(base);
-    p.setLayout(LAYOUT);
-    // index+middle+thumb over A, ring+pinky over B
-    sweep(base, [0.32, 0.38, 0.52, 0.58, 0.30], 0.25, 0.95, 16, 1000, p);
+    const { p, hits } = fresh(base);
+    sweep(p, { xs: [0.32, 0.38, 0.52, 0.58, 0.3], fromY: 0.25, toY: 0.95 });
     const voices = hits.map((h) => h.voice).sort();
     results.twoZonesChord = {
       hits: hits.length,
@@ -146,29 +193,21 @@ export async function GET() {
 
   // --- 3. Single-finger mode ignores the other fingertips.
   {
-    const { engine, hits } = fakeEngine();
-    const p = new Performer(engine);
-    p.setConfig({ ...base, fingerCount: 1 });
-    p.setLayout(LAYOUT);
-    // index over A, everything else over B — only A should sound.
-    sweep(base, [0.35, 0.52, 0.55, 0.58, 0.56], 0.25, 0.95, 16, 1000, p);
+    const { p, hits } = fresh({ ...base, fingerCount: 1 });
+    sweep(p, { xs: [0.35, 0.52, 0.55, 0.58, 0.56], fromY: 0.25, toY: 0.95 });
     results.singleFingerMode = {
       hits: hits.length,
       expected: 1,
       pass: hits.length === 1 && hits[0]?.voice === "snare",
-      voices: hits.map((h) => h.voice),
     };
   }
 
   // --- 4. Lift and strike again: the pad must re-arm.
   {
-    const { engine, hits } = fakeEngine();
-    const p = new Performer(engine);
-    p.setConfig(base);
-    p.setLayout(LAYOUT);
-    let t = sweep(base, [0.32, 0.35, 0.38, 0.40, 0.30], 0.25, 0.95, 16, 1000, p);
-    t = sweep(base, [0.32, 0.35, 0.38, 0.40, 0.30], 0.95, 0.25, 16, t + 100, p);
-    sweep(base, [0.32, 0.35, 0.38, 0.40, 0.30], 0.25, 0.95, 16, t + 100, p);
+    const { p, hits } = fresh(base);
+    let t = sweep(p, { xs: OVER_A, fromY: 0.25, toY: 0.95 });
+    t = sweep(p, { xs: OVER_A, fromY: 0.95, toY: 0.25, startMs: t + 100 });
+    sweep(p, { xs: OVER_A, fromY: 0.25, toY: 0.95, startMs: t + 100 });
     results.liftAndRestrike = {
       hits: hits.length,
       expected: 2,
@@ -178,37 +217,15 @@ export async function GET() {
 
   // --- 5. Palm mode still triggers.
   {
-    const { engine, hits } = fakeEngine();
-    const p = new Performer(engine);
-    p.setConfig({ ...base, striker: "palm" });
-    p.setLayout(LAYOUT);
-    // Palm is the mean of wrist + index MCP + pinky MCP, which `hand()` pins
-    // near x=0.5,y=0.88 — so drive a layout zone that the palm passes through.
     const wide = LayoutSchema.parse({
       ...LAYOUT,
       zones: [
         { id: "W", label: "W", x: 0.5, y: 0.5, w: 0.5, h: 0.4, voice: "tom", trigger: "strike" },
       ],
     });
-    p.setLayout(wide);
-    for (let i = 0; i < 16; i++) {
-      const y = 0.2 + (0.75 * i) / 15;
-      const lms = Array.from({ length: 21 }, () => ({ x: 0.5, y: 0.5, z: 0 }));
-      lms[0] = { x: 0.5, y, z: 0 };
-      lms[5] = { x: 0.45, y, z: 0 };
-      lms[17] = { x: 0.55, y, z: 0 };
-      lms[4] = { x: 0.4, y, z: 0 };
-      lms[8] = { x: 0.5, y, z: 0 };
-      lms[12] = { x: 0.52, y, z: 0 };
-      lms[16] = { x: 0.54, y, z: 0 };
-      lms[20] = { x: 0.56, y, z: 0 };
-      p.update({
-        hands: [{ handedness: "right", score: 1, landmarks: lms }],
-        timestampMs: 1000 + i * 16,
-        inferenceMs: 5,
-        captureLatencyMs: null,
-      });
-    }
+    const { p, hits } = fresh({ ...base, striker: "palm" }, wide);
+    // Palm tracks the knuckles, so a whole-hand descent moves it through W.
+    sweep(p, { xs: [0.5, 0.52, 0.54, 0.56, 0.48], fromY: -0.15, toY: 0.5 });
     results.palmMode = {
       hits: hits.length,
       expected: 1,
@@ -216,58 +233,119 @@ export async function GET() {
     };
   }
 
-  // --- 6. The case that per-finger cooldown could NOT catch.
-  //
-  // A steeply tilted hand spreads its fingertips ~0.18 vertically. Struck at a
-  // deliberate (not fast) speed, the tips cross the trigger line far further
-  // apart than any sane retrigger gap, so per-finger cooldown would let several
-  // through as a flam. Per-(zone,hand) arming collapses them to one hit.
+  // --- 6. The flam case per-finger cooldown could NOT catch.
   {
-    const { engine, hits } = fakeEngine();
-    const p = new Performer(engine);
-    p.setConfig(base);
-    p.setLayout(LAYOUT);
-
-    const tilt = [0, 0.045, 0.09, 0.135, 0.18]; // fingertips down a steep rake
-    const xs = [0.32, 0.35, 0.38, 0.4, 0.3];
+    const { p, hits } = fresh(base);
+    const tilt: [number, number, number, number, number] = [
+      0, 0.045, 0.09, 0.135, 0.18,
+    ];
     const frames = 40;
-    const fromY = 0.2;
-    const toY = 0.95;
-    const dtMs = 16;
-    for (let i = 0; i < frames; i++) {
-      const y = fromY + ((toY - fromY) * i) / (frames - 1);
-      p.update({
-        hands: [
-          hand({
-            index: [xs[0], y + tilt[0]],
-            middle: [xs[1], y + tilt[1]],
-            ring: [xs[2], y + tilt[2]],
-            pinky: [xs[3], y + tilt[3]],
-            thumb: [xs[4], y + tilt[4]],
-          }),
-        ],
-        timestampMs: 1000 + i * dtMs,
-        inferenceMs: 5,
-        captureLatencyMs: null,
-      });
-    }
-
-    const speed = (toY - fromY) / ((frames * dtMs) / 1000);
+    sweep(p, {
+      xs: OVER_A,
+      fromY: 0.2,
+      toY: 0.95,
+      frames,
+      yOffsets: tilt,
+    });
+    const speed = 0.75 / ((frames * 16) / 1000);
     const spreadMs = Math.round((0.18 / speed) * 1000);
     results.tiltedHandSlowStrike = {
       hits: hits.length,
       expected: 1,
       pass: hits.length === 1,
-      handSpeedUnitsPerSec: Math.round(speed * 100) / 100,
-      fingerCrossingSpreadMs: spreadMs,
-      cooldownMs: base.cooldownMs,
-      note: `tips cross ${spreadMs}ms apart vs a ${base.cooldownMs}ms cooldown — cooldown alone would not collapse these`,
+      note: `tips cross ${spreadMs}ms apart vs a ${base.cooldownMs}ms cooldown`,
+    };
+  }
+
+  // --- 7. Curled fingers are silent. A relaxed hand passing over a pad plays
+  //        nothing, which is the whole point of the extension gate.
+  {
+    const { p, hits } = fresh(base);
+    sweep(p, {
+      xs: OVER_A,
+      fromY: 0.25,
+      toY: 0.95,
+      extended: [false, false, false, false, false],
+    });
+    results.curledHandSilent = {
+      hits: hits.length,
+      expected: 0,
+      pass: hits.length === 0,
+    };
+  }
+
+  // --- 8. Extending only the index selects which finger plays.
+  {
+    const { p, hits } = fresh(base);
+    // Index over A (extended), everything else over B (curled).
+    sweep(p, {
+      xs: [0.35, 0.52, 0.55, 0.58, 0.56],
+      fromY: 0.25,
+      toY: 0.95,
+      extended: [true, false, false, false, false],
+    });
+    results.onlyExtendedFingerPlays = {
+      hits: hits.length,
+      expected: 1,
+      pass: hits.length === 1 && hits[0]?.voice === "snare",
+      voices: hits.map((h) => h.voice),
+    };
+  }
+
+  // --- 9. The gate can be turned off.
+  {
+    const { p, hits } = fresh({ ...base, requireExtendedFingers: false });
+    sweep(p, {
+      xs: OVER_A,
+      fromY: 0.25,
+      toY: 0.95,
+      extended: [false, false, false, false, false],
+    });
+    results.gateDisabledCurledPlays = {
+      hits: hits.length,
+      expected: 1,
+      pass: hits.length === 1,
+    };
+  }
+
+  // --- 10. strikeMotion "finger": moving the WHOLE hand must not trigger.
+  {
+    const { p, hits } = fresh({ ...base, strikeMotion: "finger" });
+    sweep(p, { xs: OVER_A, fromY: 0.25, toY: 0.95, movePalm: true });
+    results.fingerModeIgnoresHandMotion = {
+      hits: hits.length,
+      expected: 0,
+      pass: hits.length === 0,
+    };
+  }
+
+  // --- 11. strikeMotion "finger": a press with the hand held still DOES fire.
+  {
+    const { p, hits } = fresh({ ...base, strikeMotion: "finger" });
+    sweep(p, { xs: OVER_A, fromY: 0.25, toY: 0.95, movePalm: false });
+    results.fingerModePressFires = {
+      hits: hits.length,
+      expected: 1,
+      pass: hits.length === 1,
+    };
+  }
+
+  // --- 12. strikeMotion "hand": whole-hand strokes still work.
+  {
+    const { p, hits } = fresh({ ...base, strikeMotion: "hand" });
+    sweep(p, { xs: OVER_A, fromY: 0.25, toY: 0.95, movePalm: true });
+    results.handModeStrokeFires = {
+      hits: hits.length,
+      expected: 1,
+      pass: hits.length === 1,
     };
   }
 
   const all = Object.values(results) as { pass: boolean }[];
   return NextResponse.json({
     allPassed: all.every((r) => r.pass),
+    passed: all.filter((r) => r.pass).length,
+    total: all.length,
     results,
   });
 }
