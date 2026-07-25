@@ -73,6 +73,20 @@ const HIT = 1;
 const ACCENT = 2;
 
 /**
+ * Ceiling on how many *sounding steps* may be chords, outside round 1 (which is
+ * forced monophonic). Chords are punctuation; when everything is a chord there
+ * is no melody left to recognise.
+ */
+const MAX_CHORD_FRACTION = 0.22;
+
+/**
+ * Ceiling on how many notes may be accented. An accent that lands on most notes
+ * is not an accent — and the highway draws accents specifically so the player
+ * can feel where the bar begins.
+ */
+const MAX_ACCENT_FRACTION = 0.25;
+
+/**
  * Map a step character to a cell.
  *
  * Deliberately generous: models reach for 'o', '*' and '1' as often as 'x', and
@@ -157,6 +171,11 @@ export function repairSpec(input: unknown): PatternSpec {
     round.grid = round.grid.map((row) => row.slice(0, steps));
     thinSimultaneous(round, steps);
   }
+
+  // Chord and accent budgets run before the pristine snapshot so the gap
+  // escalation below replays them rather than reintroducing what they removed.
+  thinChords(rounds, MAX_CHORD_FRACTION);
+  thinAccents(rounds, MAX_ACCENT_FRACTION);
 
   // Gap thinning is re-run from a pristine copy at each escalation instead of
   // being applied on top of itself: thinning an already-thinned grid biases
@@ -379,6 +398,104 @@ function thinSimultaneous(round: RepairedRound, steps: number): void {
     for (const lane of active) {
       if (lane === lowest || lane === highest || inner.includes(lane)) continue;
       round.grid[lane][s] = REST;
+    }
+  }
+}
+
+/**
+ * Cap how many steps are chords, and forbid them outright in round 1.
+ *
+ * Measured on real model output: a generated "Ode to Joy" came back with EVERY
+ * one of its 38 steps as a two-lane chord and not a single lone note, so round
+ * 1 was the same two lanes struck eight times — a metronome, not a melody. A
+ * model asked for a chord ceiling reads it as a target.
+ *
+ * So the ceiling is enforced here instead. Round 1 is made strictly monophonic
+ * (a first-timer has to succeed at one thing before two), and later rounds keep
+ * chords for punctuation. Where a chord is thinned, the surviving voice is the
+ * one carrying the melody — the highest lane — because that is the line the
+ * player recognises.
+ */
+function thinChords(
+  rounds: RepairedRound[],
+  maxChordFraction: number,
+): void {
+  for (let r = 0; r < rounds.length; r++) {
+    const round = rounds[r];
+    const steps = round.grid[0]?.length ?? 0;
+    if (steps === 0) continue;
+
+    const chordSteps: number[] = [];
+    let soundingSteps = 0;
+    for (let s = 0; s < steps; s++) {
+      let n = 0;
+      for (let l = 0; l < round.grid.length; l++) {
+        if (round.grid[l][s] !== REST) n++;
+      }
+      if (n > 0) soundingSteps++;
+      if (n > 1) chordSteps.push(s);
+    }
+
+    // Round 1 teaches the instrument: one note, one target, every time.
+    const allowed =
+      r === 0 ? 0 : Math.floor(soundingSteps * maxChordFraction);
+    if (chordSteps.length <= allowed) continue;
+
+    // Keep chords on the strongest beats — a chord on a downbeat reads as
+    // deliberate, one on an offbeat reads as noise.
+    chordSteps.sort((a, b) => strength(b) - strength(a));
+    for (const s of chordSteps.slice(allowed)) {
+      let kept = -1;
+      for (let l = round.grid.length - 1; l >= 0; l--) {
+        if (round.grid[l][s] === REST) continue;
+        if (kept === -1) {
+          kept = l;
+          continue;
+        }
+        round.grid[l][s] = REST;
+      }
+    }
+  }
+}
+
+/** How musically strong a step is: bar line beats beat beats offbeats. */
+function strength(step: number): number {
+  if (step % STEPS_PER_BAR === 0) return 3;
+  if (step % 4 === 0) return 2;
+  if (step % 2 === 0) return 1;
+  return 0;
+}
+
+/**
+ * Cap accents so they still mean something.
+ *
+ * Same measurement: 80% of the notes in that chart came back accented. An
+ * accent that applies to four notes in five is not an accent, it is the
+ * baseline — and the highway renders accents larger with a bright cap
+ * specifically so the player can feel where the bar starts. Keep them on the
+ * strongest steps and demote the rest to normal hits.
+ */
+function thinAccents(rounds: RepairedRound[], maxFraction: number): void {
+  for (const round of rounds) {
+    const steps = round.grid[0]?.length ?? 0;
+    const accents: { lane: number; step: number }[] = [];
+    let total = 0;
+
+    for (let l = 0; l < round.grid.length; l++) {
+      for (let s = 0; s < steps; s++) {
+        const cell = round.grid[l][s];
+        if (cell === REST) continue;
+        total++;
+        if (cell === ACCENT) accents.push({ lane: l, step: s });
+      }
+    }
+
+    const allowed = Math.max(1, Math.floor(total * maxFraction));
+    if (accents.length <= allowed) continue;
+
+    accents.sort((a, b) => strength(b.step) - strength(a.step));
+    for (const { lane, step } of accents.slice(allowed)) {
+      round.grid[lane][step] = HIT;
     }
   }
 }

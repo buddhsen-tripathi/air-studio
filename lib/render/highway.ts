@@ -111,6 +111,12 @@ export class HighwayRenderer {
   /** Separator x positions, pre-snapped to device pixels. */
   private sepX = new Float32Array(0);
   private hairline = 1;
+  /**
+   * Colour of the bar linking simultaneous notes. Neutral rather than a lane
+   * colour: the tie belongs to neither lane, and tinting it toward one would
+   * imply the chord is rooted there.
+   */
+  private tieColor = "#e8ecf4";
   private noteSprites: HTMLCanvasElement[] = [];
   private laneGlows: HTMLCanvasElement[] = [];
   private accentGlow: HTMLCanvasElement | null = null;
@@ -500,14 +506,54 @@ export class HighwayRenderer {
       // Nearness drives size and brightness together so a note's urgency is
       // readable in peripheral vision, without having to look straight at it.
       const p = clamp01(y / hitY);
-      const scale = 0.8 + 0.2 * p;
+
+      /*
+       * ACCENTS. The chart marks downbeats with velocity 1.0 against 0.8 for
+       * everything else, and the renderer was discarding that entirely — every
+       * note looked equally important, so the bar had no felt pulse and there
+       * was nothing to lock a count onto. Accents are now visibly bigger and
+       * get a bright cap, which is the cheapest rhythmic aid available.
+       */
+      const accent = note.velocity >= 0.95;
+
+      /*
+       * ARRIVAL. The old curve grew a tile linearly from 0.8 to 1.0 across the
+       * entire approach — 20% over three seconds, which is invisible frame to
+       * frame and gave no sense of the note *arriving*. Weighting the growth
+       * late keeps distant notes small and quiet, and makes the last half
+       * second before the line unmistakable.
+       */
+      const scale = (0.6 + 0.4 * p * p) * (accent ? 1.16 : 1);
       const past = y > hitY ? 1 - (y - hitY) / this.fallout : 1;
-      const alpha = clamp01((0.5 + 0.5 * p * p) * past) * dimK;
+      const alpha = clamp01((0.38 + 0.62 * p * p) * past) * dimK;
       if (alpha <= 0.01) continue;
 
       const nw = this.noteW * scale;
       const nh = this.noteH * scale;
       const mid = this.laneMid[lane];
+
+      /*
+       * CHORD TIE. Two lanes on the same step used to render as two unrelated
+       * tiles that happened to be level. A connecting bar makes them read as
+       * one gesture, which is the cue to get both hands moving instead of
+       * noticing the second note as it lands. Notes are time-sorted, so the
+       * next entry is the only candidate, and chains of three link naturally.
+       */
+      if (j + 1 < notes.length) {
+        const next = notes[j + 1];
+        if (
+          Math.abs(next.timeSec - note.timeSec) < 1e-3 &&
+          next.lane >= 0 &&
+          next.lane < lanes &&
+          next.lane !== lane
+        ) {
+          const a = Math.min(mid, this.laneMid[next.lane]);
+          const b = Math.max(mid, this.laneMid[next.lane]);
+          ctx.globalAlpha = alpha * 0.3;
+          ctx.fillStyle = this.tieColor;
+          ctx.fillRect(a, y - this.hairline, b - a, this.hairline * 2);
+        }
+      }
 
       // Distant notes get no halo: it is invisible at that alpha anyway, and
       // skipping it removes the largest overdraw source in the frame.
@@ -524,7 +570,35 @@ export class HighwayRenderer {
       if (!sprite) continue;
       ctx.globalAlpha = alpha;
       ctx.drawImage(sprite, mid - nw / 2, y - nh / 2, nw, nh);
+
+      // An accent's bright top edge. One fillRect, and it is what lets you see
+      // the downbeat coming rather than recognising it after it has gone.
+      if (accent && p > 0.25) {
+        ctx.globalAlpha = alpha * 0.9;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(mid - nw * 0.34, y - nh / 2, nw * 0.68, this.hairline * 2);
+      }
+
+      /*
+       * STRIKE-READY RIM. Inside the last stretch before the line the tile gets
+       * an outline that tightens as it lands. Scale alone cannot say "now" —
+       * the eye reads a hard edge appearing far faster than it reads a few
+       * percent of growth, and "now" is the only thing the player must not miss.
+       */
+      if (p > 0.86) {
+        const k = (p - 0.86) / 0.14;
+        ctx.globalAlpha = alpha * k;
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = this.hairline * 2;
+        ctx.strokeRect(
+          mid - nw / 2 - 2,
+          y - nh / 2 - 2,
+          nw + 4,
+          nh + 4,
+        );
+      }
     }
+    ctx.globalAlpha = 1;
   }
 
   /** Hold bodies are capsules trailing upward from the head. */
