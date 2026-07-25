@@ -1,29 +1,88 @@
 @import "tailwindcss";
 
 /*
- * Air Studio looks like audio hardware, not a SaaS dashboard: near-black
- * chassis, one accent that reads as a signal LED, monospaced numerics for
- * anything the player reads while moving. Everything is dark-only on purpose —
- * the camera feed is the brightest thing on screen and a light chrome would
- * fight it for attention.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * AIR PIANO DUEL — design tokens
+ *
+ * Direction: BROADCAST CONTROL ROOM.
+ *
+ * Two people stand back from a webcam and glance at a screen while their hands
+ * are busy. That single fact drives every decision here: information has to be
+ * legible at 2 metres, in peripheral vision, in under 200ms. So — enormous
+ * numerals, hairline rules instead of boxes, one accent per player, and no
+ * decorative colour anywhere that isn't carrying meaning.
+ *
+ * Type: Anton for impact moments (round cards, judgements, WINNER) and Saira
+ * variable for everything else. Saira is an athletic grotesque with real width
+ * and weight axes, so the whole hierarchy comes from one 96KB file. Both are
+ * self-hosted — no external fetch, works offline, no CSP exception.
+ *
+ * Player accents are blue vs amber rather than the obvious red/blue: they
+ * separate on both hue AND lightness, so they stay distinguishable under every
+ * common form of colour-vision deficiency.
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
+@font-face {
+  font-family: "Saira";
+  src: url("/fonts/saira-var-latin.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-stretch: 50% 125%;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Anton";
+  src: url("/fonts/anton-latin.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
+  /* --- broadcast surfaces ------------------------------------------------ */
+  --color-stage: #07080a;
+  --color-field: #0c0e12;
+  --color-chrome: #12151b;
+  --color-chrome-raised: #191d25;
+  --color-rule: #21252d;
+  --color-rule-bright: #343a45;
+
+  /* --- ink --------------------------------------------------------------- */
+  --color-ink: #f4f6fa;
+  --color-ink-2: #98a1b1;
+  --color-ink-3: #5b6472;
+
+  /* --- players ----------------------------------------------------------- */
+  --color-p1: #2ea8ff;
+  --color-p1-deep: #0b3f6b;
+  --color-p2: #ff8a1f;
+  --color-p2-deep: #6b3a06;
+
+  /* --- state ------------------------------------------------------------- */
+  --color-live: #ff3b47;
+  --color-perfect: #46e5a0;
+  --color-great: #7dd3fc;
+  --color-good: #fbbf24;
+  --color-miss: #ff5470;
+
+  /* --- legacy practice-mode tokens (studio UI still uses these) ---------- */
   --color-chassis: #08090c;
   --color-panel: #101319;
   --color-panel-raised: #171b23;
   --color-edge: #232833;
   --color-edge-bright: #333a48;
-
-  --color-ink: #e8ecf4;
   --color-ink-dim: #99a1b3;
   --color-ink-faint: #626b7e;
-
   --color-signal: #4ade9b;
-  --color-signal-dim: #1f7d55;
   --color-hot: #ff5c7a;
   --color-amber: #ffb454;
 
+  /* --- type -------------------------------------------------------------- */
+  --font-display: "Anton", "Haettenschweiler", "Arial Narrow Bold", sans-serif;
+  --font-ui:
+    "Saira", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
@@ -38,34 +97,189 @@ body {
 }
 
 body {
-  background: var(--color-chassis);
+  background: var(--color-stage);
   color: var(--color-ink);
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-ui);
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
 
-/* Subtle vignette so the camera feed sits *in* the chassis rather than on it. */
-.stage-vignette::after {
+/* ─────────────────────────────────────────────────────────────── typography */
+
+/*
+ * Scores and timers change many times a second. Without tabular figures the
+ * whole readout jitters horizontally as digits swap, which is maddening in
+ * peripheral vision — so every numeral in this app is tabular, by default.
+ */
+.numeral {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  letter-spacing: -0.01em;
+}
+
+/* Impact type: round cards, judgements, the winner callout. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  line-height: 0.86;
+}
+
+/* Broadcast label: the small all-caps tags on every panel. */
+.label {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-stretch: 112%;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.625rem;
+  color: var(--color-ink-3);
+}
+
+/* Condensed heavy text for name plates — real broadcast lower-thirds. */
+.plate-name {
+  font-family: var(--font-ui);
+  font-weight: 800;
+  font-stretch: 88%;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* ────────────────────────────────────────────────────────────── atmosphere */
+
+/*
+ * A faint scanline field + vignette. This is the single texture that makes the
+ * screen read as "broadcast feed" rather than "web page", and it costs one
+ * composited layer with no per-frame work.
+ */
+.broadcast-field {
+  position: relative;
+  background:
+    radial-gradient(
+      ellipse 120% 80% at 50% 0%,
+      rgb(255 255 255 / 0.028),
+      transparent 60%
+    ),
+    var(--color-field);
+}
+
+.broadcast-field::after {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(
-    ellipse at center,
-    transparent 55%,
-    rgb(0 0 0 / 0.55) 100%
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgb(0 0 0 / 0.16) 0px,
+    rgb(0 0 0 / 0.16) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  opacity: 0.5;
+  mix-blend-mode: multiply;
+}
+
+/* Hairline separators — broadcast chrome uses rules, not borders and boxes. */
+.rule-h {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--color-rule-bright) 12%,
+    var(--color-rule-bright) 88%,
+    transparent
   );
 }
 
-.numeric {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
+/* ─────────────────────────────────────────────────────────────────── motion */
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
-/* --- range inputs: the sliders are played with, so they get real treatment --- */
+@keyframes judgement-pop {
+  0% {
+    transform: scale(0.72) translateY(6px);
+    opacity: 0;
+  }
+  35% {
+    transform: scale(1.06) translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) translateY(-10px);
+    opacity: 0;
+  }
+}
+
+@keyframes combo-kick {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.14);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes count-in {
+  0% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+  25% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  75% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.86);
+    opacity: 0;
+  }
+}
+
+@keyframes sweep-in {
+  from {
+    transform: translateX(-8px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-live {
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+.animate-judgement {
+  animation: judgement-pop 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.animate-combo {
+  animation: combo-kick 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.animate-count {
+  animation: count-in 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.animate-sweep {
+  animation: sweep-in 340ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─────────────────────────────────────────────────────────────────── inputs */
+
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -78,7 +292,7 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: 999px;
-  background: var(--color-edge-bright);
+  background: var(--color-rule-bright);
 }
 
 input[type="range"]::-webkit-slider-thumb {
@@ -89,20 +303,20 @@ input[type="range"]::-webkit-slider-thumb {
   margin-top: -5.5px;
   border-radius: 999px;
   background: var(--color-ink);
-  border: 3px solid var(--color-panel);
-  box-shadow: 0 0 0 1px var(--color-edge-bright);
+  border: 3px solid var(--color-chrome);
+  box-shadow: 0 0 0 1px var(--color-rule-bright);
   transition: background 120ms ease;
 }
 
 input[type="range"]:hover::-webkit-slider-thumb,
 input[type="range"]:focus-visible::-webkit-slider-thumb {
-  background: var(--color-signal);
+  background: var(--color-p1);
 }
 
 input[type="range"]::-moz-range-track {
   height: 3px;
   border-radius: 999px;
-  background: var(--color-edge-bright);
+  background: var(--color-rule-bright);
 }
 
 input[type="range"]::-moz-range-thumb {
@@ -110,45 +324,22 @@ input[type="range"]::-moz-range-thumb {
   height: 14px;
   border-radius: 999px;
   background: var(--color-ink);
-  border: 3px solid var(--color-panel);
+  border: 3px solid var(--color-chrome);
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-signal);
+  outline: 2px solid var(--color-p1);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 3px;
 }
 
-@keyframes pulse-ring {
-  0% {
-    opacity: 0.9;
-    transform: scale(0.85);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.6);
-  }
-}
-
-.rec-dot::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  border: 1px solid currentColor;
-  animation: pulse-ring 1.6s ease-out infinite;
-}
-
-/* Respect users who don't want the ambient motion. */
-@media (prefers-reduced-motion: reduce) {
-  .rec-dot::before {
-    animation: none;
-  }
-  *,
-  *::before,
-  *::after {
-    transition-duration: 0.01ms !important;
-  }
+/* Room codes are read aloud across a room — they get maximum separation. */
+.code-display {
+  font-family: var(--font-display);
+  font-size: clamp(3rem, 12vw, 7rem);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1;
 }
 
 ::-webkit-scrollbar {
@@ -159,10 +350,26 @@ input[type="range"]::-moz-range-thumb {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-edge);
+  background: var(--color-rule);
   border-radius: 999px;
-  border: 3px solid var(--color-chassis);
+  border: 3px solid var(--color-stage);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-edge-bright);
+  background: var(--color-rule-bright);
+}
+
+/* Anyone who asked for less motion gets the information, not the theatre. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-live,
+  .animate-judgement,
+  .animate-combo,
+  .animate-count,
+  .animate-sweep {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+  }
 }
