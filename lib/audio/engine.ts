@@ -25,6 +25,17 @@ export interface NoteOnOptions {
    * Maps to brightness on most voices.
    */
   tone?: number;
+  /**
+   * Absolute AudioContext time to sound at. Omit for live hits — they must
+   * sound now, and adding any offset is pure latency.
+   *
+   * This exists for *sequenced* playback (the backing track), where scheduling
+   * ahead is not just acceptable but required: a metronome driven off timers
+   * would jitter audibly, whereas events queued against the audio clock are
+   * sample-accurate. Live hits and sequenced playback want opposite things,
+   * which is why this is opt-in rather than the default.
+   */
+  when?: number;
 }
 
 /** Handle returned by sustaining voices so the caller can release them. */
@@ -145,7 +156,12 @@ export class AudioEngine {
     const master = this.master;
     if (!ctx || !master || !this.noise) return;
 
-    const t = ctx.currentTime;
+    // A `when` in the past would make the envelope ramps run backwards, so
+    // clamp it forward. Live hits pass nothing and get currentTime.
+    const t =
+      opts.when === undefined
+        ? ctx.currentTime
+        : Math.max(opts.when, ctx.currentTime);
     const vel = clamp01(opts.velocity);
     const trim = opts.gain ?? 1;
     const tone = opts.tone ?? 0.5;

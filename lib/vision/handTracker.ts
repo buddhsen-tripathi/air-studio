@@ -172,6 +172,34 @@ export class HandTracker {
   }
 
   /**
+   * Point the tracker at a different <video> element, reusing the camera
+   * stream that is already running.
+   *
+   * The UI moves between screens, and each screen mounts its own <video>. The
+   * MediaStream itself is independent of any element, so re-binding is far
+   * cheaper and faster than tearing the camera down and calling getUserMedia
+   * again — which would cost a permission round-trip and seconds of black
+   * screen on every phase change.
+   */
+  async bindVideo(video: HTMLVideoElement): Promise<void> {
+    if (this.video === video && video.srcObject) return;
+    this.stop();
+    this.video = video;
+    // Force the duplicate-frame guard to accept the first frame of the new
+    // element, whose currentTime restarts independently.
+    this.lastVideoTime = -1;
+    if (this.stream) {
+      video.srcObject = this.stream;
+      try {
+        await video.play();
+      } catch {
+        // Autoplay can reject if the element is not yet visible; the next
+        // bind (or a user gesture) will pick it up.
+      }
+    }
+  }
+
+  /**
    * Begin the detection loop. `onFrame` is called synchronously per camera
    * frame — it is the hot path, so it must not allocate or touch React state.
    */

@@ -94,6 +94,20 @@ export interface PerformerConfig {
    * - `either` whichever is greater. Supports both without switching modes.
    */
   strikeMotion: "hand" | "finger" | "either";
+  /**
+   * Who decides what a hit sounds like.
+   *
+   * - `direct`   the Performer sounds the zone's own note. Free-play / practice.
+   * - `external` the Performer emits the hit but stays silent, leaving the
+   *              caller to sound it.
+   *
+   * `external` exists for Magic Piano semantics in the duel game: the chart
+   * owns the pitch, not the zone, so the judge looks up whichever note was
+   * scheduled for that lane and plays *that*. The judge runs synchronously in
+   * this same frame callback, so the note still reaches the sound card in the
+   * tick it was detected — the hot path is unchanged.
+   */
+  audioMode: "direct" | "external";
   smoothing: OneEuroConfig;
 }
 
@@ -105,6 +119,7 @@ export const DEFAULT_PERFORMER_CONFIG: PerformerConfig = {
   fingerCount: FINGER_COUNT,
   requireExtendedFingers: true,
   strikeMotion: "either",
+  audioMode: "direct",
   smoothing: DEFAULT_ONE_EURO,
 };
 
@@ -669,12 +684,15 @@ export class Performer {
     tMs: number,
     finger: number,
   ): void {
-    this.engine.noteOn(zone.voice, {
-      velocity,
-      note: zone.note,
-      gain: zone.gain,
-      tone,
-    });
+    // In `external` mode the caller sounds the hit instead — see `audioMode`.
+    if (this.config.audioMode === "direct") {
+      this.engine.noteOn(zone.voice, {
+        velocity,
+        note: zone.note,
+        gain: zone.gain,
+        tone,
+      });
+    }
     this.zoneFlash.set(zone.id, { tMs: performance.now(), velocity });
 
     const event: HitEvent = {
