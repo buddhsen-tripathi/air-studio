@@ -9,7 +9,6 @@ import {
   Performer,
   type HitEvent,
 } from "@/lib/vision/performer";
-import { BackingTrack } from "./backing";
 import { ChartClock } from "./clock";
 import { Judge } from "./judge";
 import { laneIndexFromZoneId, laneLayout } from "./lanes";
@@ -29,6 +28,14 @@ import { emptyScore } from "./types";
  * That is why this is a plain class and not a hook: hooks tempt you into
  * putting per-frame values in state, and the first person to do it would add a
  * frame of latency to every note without noticing.
+ *
+ * ── No backing track ──────────────────────────────────────────────────────
+ * There is deliberately no groove underneath the chart. A drum-and-bass bed
+ * masked the notes the player was actually producing, and under Magic Piano
+ * semantics the whole point is that what you hear is what YOU released. The
+ * BackingTrack class is still in ./backing.ts, unwired, if a pulse is ever
+ * wanted back; `scheduleCountIn` from the same module is still used for the
+ * count-in, which is a click rather than music.
  */
 
 /**
@@ -76,7 +83,6 @@ export class DuelSession {
   private performer: Performer | null = null;
   private highway: HighwayRenderer | null = null;
   private stage: StageRenderer | null = null;
-  private backing: BackingTrack | null = null;
   private sprites = new SpriteCache();
 
   private chart: Chart | null = null;
@@ -172,7 +178,14 @@ export class DuelSession {
       // own note — the judge sounds whatever the chart scheduled instead.
       audioMode: "external",
       striker: "fingers",
-      fingerCount: 5,
+      // Index finger only.
+      //
+      // Five live strikers made an open hand a five-pointed trigger sweeping
+      // the frame, and with lanes this wide most of the extra fingers were
+      // hovering over a neighbouring lane rather than the one being aimed at.
+      // One decisive point per hand is far easier to aim, and two hands still
+      // give two strikers — enough for the two-lane chords charts can contain.
+      fingerCount: 1,
     });
     performer.onHit = (event) => this.handleHit(event);
     this.performer = performer;
@@ -182,7 +195,6 @@ export class DuelSession {
     await tracker.load();
     await tracker.startCamera(opts.video);
 
-    this.backing = new BackingTrack(this.engine, this.engine.context!);
     await this.attach(opts);
     this.startRenderLoop();
   }
@@ -280,13 +292,11 @@ export class DuelSession {
     if (!ctx || !this.chart) return;
     this.judge?.reset();
     this.clock.start(ctx, audioTime);
-    this.backing?.start(this.chart, audioTime);
     this.endAtSec = this.chart.durationSec;
     this.phase = "playing";
   }
 
   stopChart(): void {
-    this.backing?.stop();
     this.clock.stop();
     this.engine.allNotesOff();
     this.phase = "ended";
@@ -297,7 +307,6 @@ export class DuelSession {
     this.rafHandle = null;
     for (const ro of this.resizeObservers.values()) ro.disconnect();
     this.resizeObservers.clear();
-    this.backing?.stop();
     this.tracker?.dispose();
     this.performer?.panic();
     void this.engine.dispose();
@@ -476,6 +485,12 @@ export class DuelSession {
     // just be clutter at picture-in-picture size.
     stage.draw(this.layout, {
       showSkeleton: true,
+      // Lane grid over the camera: it shows where the lanes fall across your
+      // own body, which is what makes reaching for one instinctive. The `grid`
+      // mode keeps that and drops the per-zone sprite work.
+      zones: "grid",
+      // Showing the prediction lead would be actively confusing here: the
+      // marker would sit ahead of the player's real fingertip.
       showPrediction: false,
       showLabels: false,
     });

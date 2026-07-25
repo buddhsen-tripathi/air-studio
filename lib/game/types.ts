@@ -201,5 +201,14 @@ export interface RoundSummary {
  * This only compensates the player's own hardware, so it does not advantage
  * anyone — it makes two different webcams score the same performance equally.
  */
-export const DEFAULT_CALIBRATION_SEC = 0.06;
+/**
+ * Starting offset before the tap test has run.
+ *
+ * Deliberately small. The Performer's `predictMs` already front-runs most of
+ * the capture pipeline, so this only needs to absorb whatever prediction did
+ * not — and the two compensations stack. When predictMs was 55 this sat at 60ms
+ * to cover the rest; now that prediction does the heavy lifting, leaving it at
+ * 60 would push hits from late to early, which feels just as wrong.
+ */
+export const DEFAULT_CALIBRATION_SEC = 0.02;
 export const MAX_CALIBRATION_SEC = 0.25;

@@ -43,10 +43,24 @@ export interface OneEuroConfig {
   derivativeCutoff: number;
 }
 
+/**
+ * Tuned for responsiveness over steadiness.
+ *
+ * These are the single biggest source of *felt* lag that we actually control.
+ * Smoothing lag is real lag: at minCutoff 1.2 a hand that starts moving takes
+ * ~130ms to be believed, which lands on top of the camera's own 40-80ms and is
+ * plainly visible as the cursor trailing your fingertip.
+ *
+ * Raising minCutoff cuts the lag at rest; raising beta makes the filter get out
+ * of the way much harder as soon as you move, which is exactly the moment that
+ * matters for a strike. The cost is a little more jitter when your hand is
+ * still — and a still hand is not about to trigger anything, so that jitter is
+ * invisible in practice.
+ */
 export const DEFAULT_ONE_EURO: OneEuroConfig = {
-  minCutoff: 1.2,
-  beta: 0.035,
-  derivativeCutoff: 1.0,
+  minCutoff: 2.2,
+  beta: 0.11,
+  derivativeCutoff: 1.2,
 };
 
 export class OneEuroFilter {

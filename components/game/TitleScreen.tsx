@@ -181,32 +181,53 @@ export function TitleScreen({
             </p>
           )}
         </div>
-      </div>
 
-      <div className="rule-h relative z-10" aria-hidden />
-      <footer className="relative z-10 flex items-center justify-center px-5 py-4 sm:px-8">
-        <button
-          type="button"
-          onClick={onPractice}
-          className="group inline-flex items-center gap-2 text-[11px] font-semibold uppercase leading-none tracking-[0.16em] text-ink-3 transition-colors hover:text-ink [font-stretch:112%]"
-        >
-          Play alone in practice mode
-          <svg
-            viewBox="0 0 16 16"
-            width="14"
-            height="14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-            className="transition-transform duration-150 group-hover:translate-x-0.5"
+        {/*
+         * Solo sits with the other two actions rather than in a footer.
+         *
+         * It is not a fine-print escape hatch — it is the only way to play
+         * without a second person present, which is most of the time. Buried in
+         * a footer it read as an afterthought; here it is the third choice on
+         * the same shelf, still visually subordinate to the two duel actions
+         * because the duel is the point.
+         */}
+        <div className="animate-sweep flex flex-col items-center gap-3">
+          <div className="flex w-full items-center gap-4" aria-hidden>
+            <span className="h-px flex-1 bg-rule" />
+            <span className="label">or</span>
+            <span className="h-px flex-1 bg-rule" />
+          </div>
+
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={onPractice}
+            disabled={connecting}
+            className="group w-full sm:w-auto"
           >
-            <path d="M2.5 8h10M9 4.5 12.5 8 9 11.5" />
-          </svg>
-        </button>
-      </footer>
+            Practice on your own
+            <svg
+              viewBox="0 0 16 16"
+              width="15"
+              height="15"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden
+              className="ml-2 transition-transform duration-150 group-hover:translate-x-0.5"
+            >
+              <path d="M2.5 8h10M9 4.5 12.5 8 9 11.5" />
+            </svg>
+          </Button>
+
+          <p className="max-w-[42ch] text-center text-xs leading-snug text-ink-3">
+            Same chart, same scoring, no opponent — good for finding your range
+            before someone is watching.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

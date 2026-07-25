@@ -147,9 +147,12 @@ export class HandTracker {
       },
       runningMode: "VIDEO",
       numHands: this.opts.numHands ?? 2,
-      minHandDetectionConfidence: this.opts.minHandDetectionConfidence ?? 0.5,
-      minHandPresenceConfidence: 0.5,
-      minTrackingConfidence: this.opts.minTrackingConfidence ?? 0.5,
+      // Lower thresholds latch onto a hand sooner and hold it through fast
+      // motion blur. A dropped hand mid-stroke costs a whole missed note, which
+      // is far worse than occasionally tracking something that is not a hand.
+      minHandDetectionConfidence: this.opts.minHandDetectionConfidence ?? 0.4,
+      minHandPresenceConfidence: 0.4,
+      minTrackingConfidence: this.opts.minTrackingConfidence ?? 0.35,
     });
   }
 
@@ -158,8 +161,12 @@ export class HandTracker {
     this.video = video;
     this.stream = await navigator.mediaDevices.getUserMedia({
       video: {
-        width: { ideal: 960 },
-        height: { ideal: 540 },
+        // MediaPipe resizes every frame to 192x192 for palm detection and
+        // 224x224 for landmarks, so capturing at 960x540 buys no accuracy at
+        // all — it only costs decode time and a bigger texture upload on every
+        // single frame. 640x360 is the same detection quality, sooner.
+        width: { ideal: 640 },
+        height: { ideal: 360 },
         // A high camera frame rate is the cheapest latency win available: at
         // 60fps the worst-case wait for the next frame is 16ms, not 33ms.
         frameRate: { ideal: 60, min: 30 },

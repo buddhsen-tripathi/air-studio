@@ -112,9 +112,15 @@ export interface PerformerConfig {
 }
 
 export const DEFAULT_PERFORMER_CONFIG: PerformerConfig = {
-  predictMs: 55,
-  sensitivity: 0.5,
-  cooldownMs: 70,
+  // Front-run the camera pipeline harder. 55ms cancelled roughly half of a
+  // typical webcam's capture+decode+inference latency; 95ms cancels most of it.
+  // This does not remove latency, it fires on where your hand is heading — so
+  // the sound lands when the stroke *feels* like it arrived.
+  predictMs: 95,
+  // A strike is recognised earlier in the stroke rather than at full speed,
+  // which shaves real milliseconds off the moment of detection.
+  sensitivity: 0.72,
+  cooldownMs: 55,
   striker: "fingers",
   fingerCount: FINGER_COUNT,
   requireExtendedFingers: true,

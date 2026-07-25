@@ -28,6 +28,18 @@ export interface RenderOptions {
   showPrediction: boolean;
   /** Dim zones the current striker cannot reach (wrong hand). */
   showLabels: boolean;
+  /**
+   * How much zone furniture to draw over the camera.
+   *
+   * - `full`  rounded pads, glow sprites, dashed trigger lines, labels.
+   *           Right for practice mode, where the zones ARE the instrument.
+   * - `grid`  bare lane separators, the trigger line, and a flat flash on hit.
+   *           A few stroked paths per frame instead of a sprite composite per
+   *           zone — visually it still tells you where the lanes fall on your
+   *           body, which is the thing worth having.
+   * - `none`  hands only.
+   */
+  zones?: "full" | "grid" | "none";
 }
 
 export class StageRenderer {
@@ -76,13 +88,17 @@ export class StageRenderer {
   draw(layout: Layout | null, options: RenderOptions): void {
     const { ctx, width: w, height: h } = this;
     ctx.clearRect(0, 0, w, h);
-    if (!layout) return;
 
     const now = performance.now();
     const hands = this.performer.getHandStates();
 
-    for (const zone of layout.zones) {
-      this.drawZone(zone, now, hands, options);
+    const mode = options.zones ?? "full";
+    if (layout && mode === "full") {
+      for (const zone of layout.zones) {
+        this.drawZone(zone, now, hands, options);
+      }
+    } else if (layout && mode === "grid") {
+      this.drawZoneGrid(layout, now);
     }
 
     for (const hand of hands) {
@@ -185,6 +201,61 @@ export class StageRenderer {
 
     if (options.showLabels) {
       this.drawZoneLabel(zone, x, y, zw, zh, color, heat);
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * The cheap lane grid: separators, the strike plane, and a flat hit flash.
+   *
+   * This exists because seeing the lanes fall across your own body is genuinely
+   * useful — it tells you where to put your hands without looking away from the
+   * notes. The expensive parts of `drawZone` (rounded paths, glow sprites,
+   * dashed strokes, text) contributed almost nothing to that, so this keeps the
+   * information and drops the cost to a handful of straight lines per frame.
+   */
+  private drawZoneGrid(layout: Layout, now: number): void {
+    const { ctx, width: w, height: h } = this;
+    ctx.save();
+
+    // One pass for every separator, so the whole grid is a single stroke call.
+    ctx.beginPath();
+    for (const zone of layout.zones) {
+      const b = zoneBounds(zone);
+      const left = Math.round(b.left * w) + 0.5;
+      const right = Math.round(b.right * w) + 0.5;
+      ctx.moveTo(left, 0);
+      ctx.lineTo(left, h);
+      ctx.moveTo(right, 0);
+      ctx.lineTo(right, h);
+    }
+    ctx.strokeStyle = "rgba(232,236,244,0.14)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // The strike plane — the exact height a downward stroke has to cross.
+    ctx.beginPath();
+    for (const zone of layout.zones) {
+      if (zone.trigger !== "strike") continue;
+      const b = zoneBounds(zone);
+      const y = Math.round(b.midY * h) + 0.5;
+      ctx.moveTo(b.left * w + 4, y);
+      ctx.lineTo(b.right * w - 4, y);
+    }
+    ctx.strokeStyle = "rgba(232,236,244,0.3)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Flat flash on a struck lane: no sprite, just a fill that decays.
+    for (const zone of layout.zones) {
+      const flash = this.performer.zoneFlash.get(zone.id);
+      if (!flash) continue;
+      const heat = 1 - (now - flash.tMs) / FLASH_MS;
+      if (heat <= 0) continue;
+      const b = zoneBounds(zone);
+      ctx.fillStyle = withAlpha(zoneColor(zone), heat * 0.3 * flash.velocity);
+      ctx.fillRect(b.left * w, b.top * h, zone.w * w, zone.h * h);
     }
 
     ctx.restore();
